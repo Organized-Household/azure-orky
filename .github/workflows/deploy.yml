@@ -22,6 +22,6 @@ jobs:
         uses: azure/container-apps-deploy-action@v1
         with:
           appSourcePath: .
-          acrName: orkyaCRjp
+          acrName: orkyacrjp
           containerAppName: orky-api
           resourceGroup: orky-rg
