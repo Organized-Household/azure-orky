@@ -1,0 +1,20 @@
+{
+  "name": "azure-orky",
+  "version": "1.0.0",
+  "description": "Orky AI orchestration API hosted on Azure Container Apps.",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "mssql": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
