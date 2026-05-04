@@ -1,0 +1,12 @@
+CREATE TABLE audit_logs (
+  audit_log_id UNIQUEIDENTIFIER PRIMARY KEY,
+  execution_id UNIQUEIDENTIFIER NOT NULL,
+  story_id VARCHAR(255) NOT NULL,
+  step VARCHAR(100) NOT NULL,
+  state VARCHAR(50) NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  message NVARCHAR(MAX) NULL,
+  metadata_json NVARCHAR(MAX) NULL,
+  timestamp DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+
