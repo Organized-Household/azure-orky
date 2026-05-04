@@ -18,9 +18,10 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy to Azure Container Apps
+      - name: Build and Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v1
         with:
           appSourcePath: .
+          acrName: orkyaCRjp
           containerAppName: orky-api
           resourceGroup: orky-rg
