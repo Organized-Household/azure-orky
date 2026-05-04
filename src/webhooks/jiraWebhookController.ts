@@ -37,7 +37,14 @@ export async function handleJiraWebhook(
     console.warn("Jira webhook validation failed", {
       missingFields: validation.missingFields,
     });
-    await executionFactory.createRejectedExecution(validation);
+    try {
+      await executionFactory.createRejectedExecution(validation);
+    } catch (error) {
+      console.error("Jira webhook validation audit failed", {
+        detail: getSafeProcessingFailureDetail(error),
+      });
+    }
+
     sendJson(res, 400, {
       error: "Invalid payload",
       ...(shouldIncludeLocalDetails()

@@ -98,6 +98,7 @@ function acceptanceCriteriaFieldNames(): string[] {
     "acceptance_criteria",
     "acceptance criteria",
     "customfield_acceptance_criteria",
+    "customfield_10016",
   ].filter((fieldName): fieldName is string => Boolean(fieldName));
 }
 
@@ -164,4 +165,3 @@ function asRecord(value: unknown): JsonRecord {
 function normalizeFieldName(fieldName: string): string {
   return fieldName.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
-
