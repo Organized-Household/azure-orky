@@ -1,14 +1,18 @@
 import { AuditLogger } from "../audit/auditLogger";
 import { ExecutionRepository } from "../db/repositories/executionRepository";
+import { InstructionPacketRepository } from "../db/repositories/instructionPacketRepository";
 import { EXECUTION_STATES, StoryPayload } from "../domain/storyPayload";
+import { ForgeClient } from "../integrations/forge/forgeClient";
+import { InstructionValidator } from "../integrations/forge/instructionValidator";
 import { StoryRetrievalService } from "../integrations/jira/storyRetrievalService";
+import { ForgeOrchestrator } from "./forgeOrchestrator";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
 
 export interface IntakeSuccess {
   received: true;
   executionId: string;
   storyId: string;
-  status: "STORY_FETCHED";
+  status: "PACKET_VALIDATED";
   storyPayload: StoryPayload;
 }
 
@@ -143,11 +147,30 @@ export class ExecutionFactory {
         },
       });
 
+      const forgeOrchestrator = new ForgeOrchestrator(
+        new ForgeClient(),
+        new InstructionValidator(),
+        this.executionRepository,
+        new InstructionPacketRepository(),
+        this.auditLogger,
+      );
+
+      const instructionPacket = await forgeOrchestrator.run(execution.executionId, storyPayload);
+
+      await this.auditLogger.log({
+        executionId: execution.executionId,
+        storyId: storyPayload.storyId,
+        step: "execution_ready_for_agent",
+        state: EXECUTION_STATES.PACKET_VALIDATED,
+        status: "succeeded",
+        message: `Packet ${instructionPacket.packetId} validated and ready for mutation agent`,
+      });
+
       return {
         received: true,
         executionId: execution.executionId,
         storyId: storyPayload.storyId,
-        status: EXECUTION_STATES.STORY_FETCHED,
+        status: EXECUTION_STATES.PACKET_VALIDATED,
         storyPayload,
       };
     } catch (error) {
