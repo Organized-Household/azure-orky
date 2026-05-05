@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(node -e \"const A = require\\('@anthropic-ai/sdk'\\); console.log\\(Object.keys\\(A\\).filter\\(k => k.includes\\('Error'\\) || k.includes\\('Status'\\) || k.includes\\('Timeout'\\)\\)\\)\")",
+      "Bash(node -e \"const A = require\\('@anthropic-ai/sdk'\\); const e = new A.APIConnectionTimeoutError\\(\\); console.log\\(e.constructor.name\\); const e2 = A.InternalServerError; console.log\\(typeof e2\\);\")",
+      "Bash(node -e \"const A = require\\('@anthropic-ai/sdk'\\); const err = A.APIError; const instance = Object.create\\(err.prototype\\); console.log\\('status' in instance, 'headers' in instance\\)\")",
+      "Bash(node -e \"const A = require\\('@anthropic-ai/sdk'\\); console.log\\(A.default ? 'has default' : 'no default'\\); const c = new A.default\\({apiKey:'test'}\\); console.log\\(typeof c.messages?.create\\);\")",
+      "Bash(node -e \"const d = require\\('fs'\\).readFileSync\\(0,'utf8'\\); const p = JSON.parse\\(d\\); console.log\\(p.version\\)\")",
+      "Bash(xargs grep *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}
