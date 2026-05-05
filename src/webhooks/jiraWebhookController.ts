@@ -24,7 +24,8 @@ export async function handleJiraWebhook(
   const validation = validateJiraWebhookPayload(payload);
   const executionFactory = new ExecutionFactory();
 
-  if (validation.kind === "ignored") {
+  // Non-triggering event: valid parse but not a Ready for Engineering transition
+  if (validation.ignored === true) {
     sendJson(res, 200, {
       received: true,
       ignored: true,
@@ -33,7 +34,8 @@ export async function handleJiraWebhook(
     return;
   }
 
-  if (validation.kind === "invalid") {
+  // Failed field validation: event was triggering but payload is incomplete
+  if (validation.valid === false) {
     console.warn("Jira webhook validation failed", {
       missingFields: validation.missingFields,
     });
@@ -44,7 +46,6 @@ export async function handleJiraWebhook(
         detail: getSafeProcessingFailureDetail(error),
       });
     }
-
     sendJson(res, 400, {
       error: "Invalid payload",
       ...(shouldIncludeLocalDetails()
@@ -54,6 +55,7 @@ export async function handleJiraWebhook(
     return;
   }
 
+  // Happy path: valid triggering event with all required fields
   try {
     const result = await executionFactory.createValidatedExecution(validation);
     sendJson(res, 200, {
@@ -76,7 +78,6 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let receivedBytes = 0;
-
     req.on("data", (chunk: Buffer) => {
       receivedBytes += chunk.length;
       if (receivedBytes > MAX_WEBHOOK_BODY_BYTES) {
@@ -84,10 +85,8 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
         req.destroy();
         return;
       }
-
       chunks.push(chunk);
     });
-
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
@@ -108,40 +107,33 @@ function shouldIncludeLocalDetails(): boolean {
 
 function getSafeProcessingFailureDetail(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-
   if (message.includes("Missing Jira configuration")) {
     return "Missing Jira configuration: JIRA_BASE_URL, JIRA_EMAIL, or JIRA_API_TOKEN";
   }
-
   const jiraStatusMatch = message.match(/Jira issue fetch failed with status \d+/);
   if (jiraStatusMatch) {
     return jiraStatusMatch[0];
   }
-
   const missingStoryFieldMatch = message.match(
     /Missing required Jira story field: (.+)$/,
   );
   if (missingStoryFieldMatch) {
     return `Fetched Jira story missing required field: ${missingStoryFieldMatch[1]}`;
   }
-
   if (
     message.includes("Invalid object name 'executions'") ||
     message.includes('Invalid object name "executions"')
   ) {
     return "Database schema missing: run 001_create_executions.sql";
   }
-
   if (
     message.includes("Invalid object name 'audit_logs'") ||
     message.includes('Invalid object name "audit_logs"')
   ) {
     return "Database schema missing: run 002_create_audit_logs.sql";
   }
-
   if (message.toLowerCase().includes("login failed")) {
     return "Database login failed";
   }
-
   return "Processing failed after payload validation";
 }
