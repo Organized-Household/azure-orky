@@ -24,7 +24,8 @@ export async function handleJiraWebhook(
   const validation = validateJiraWebhookPayload(payload);
   const executionFactory = new ExecutionFactory();
 
-  if (validation.kind === "ignored") {
+  // Non-triggering event: valid parse but not a Ready for Engineering transition
+  if (validation.ignored === true) {
     sendJson(res, 200, {
       received: true,
       ignored: true,
@@ -33,12 +34,28 @@ export async function handleJiraWebhook(
     return;
   }
 
-  if (validation.kind === "invalid") {
-    await executionFactory.createRejectedExecution(validation);
-    sendJson(res, 400, { error: "Invalid payload" });
+  // Failed field validation: event was triggering but payload is incomplete
+  if (validation.valid === false) {
+    console.warn("Jira webhook validation failed", {
+      missingFields: validation.missingFields,
+    });
+    try {
+      await executionFactory.createRejectedExecution(validation);
+    } catch (error) {
+      console.error("Jira webhook validation audit failed", {
+        detail: getSafeProcessingFailureDetail(error),
+      });
+    }
+    sendJson(res, 400, {
+      error: "Invalid payload",
+      ...(shouldIncludeLocalDetails()
+        ? { missingFields: validation.missingFields }
+        : {}),
+    });
     return;
   }
 
+  // Happy path: valid triggering event with all required fields
   try {
     const result = await executionFactory.createValidatedExecution(validation);
     sendJson(res, 200, {
@@ -47,8 +64,13 @@ export async function handleJiraWebhook(
       storyId: result.storyId,
       status: result.status,
     });
-  } catch {
-    sendJson(res, 502, { error: "Jira story retrieval failed" });
+  } catch (error) {
+    const detail = getSafeProcessingFailureDetail(error);
+    console.error("Jira webhook processing failed", { detail });
+    sendJson(res, 502, {
+      error: "Jira story retrieval failed",
+      ...(shouldIncludeLocalDetails() ? { detail } : {}),
+    });
   }
 }
 
@@ -56,7 +78,6 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let receivedBytes = 0;
-
     req.on("data", (chunk: Buffer) => {
       receivedBytes += chunk.length;
       if (receivedBytes > MAX_WEBHOOK_BODY_BYTES) {
@@ -64,10 +85,8 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
         req.destroy();
         return;
       }
-
       chunks.push(chunk);
     });
-
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
@@ -82,3 +101,39 @@ function sendJson(
   res.end(JSON.stringify(payload));
 }
 
+function shouldIncludeLocalDetails(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
+function getSafeProcessingFailureDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("Missing Jira configuration")) {
+    return "Missing Jira configuration: JIRA_BASE_URL, JIRA_EMAIL, or JIRA_API_TOKEN";
+  }
+  const jiraStatusMatch = message.match(/Jira issue fetch failed with status \d+/);
+  if (jiraStatusMatch) {
+    return jiraStatusMatch[0];
+  }
+  const missingStoryFieldMatch = message.match(
+    /Missing required Jira story field: (.+)$/,
+  );
+  if (missingStoryFieldMatch) {
+    return `Fetched Jira story missing required field: ${missingStoryFieldMatch[1]}`;
+  }
+  if (
+    message.includes("Invalid object name 'executions'") ||
+    message.includes('Invalid object name "executions"')
+  ) {
+    return "Database schema missing: run 001_create_executions.sql";
+  }
+  if (
+    message.includes("Invalid object name 'audit_logs'") ||
+    message.includes('Invalid object name "audit_logs"')
+  ) {
+    return "Database schema missing: run 002_create_audit_logs.sql";
+  }
+  if (message.toLowerCase().includes("login failed")) {
+    return "Database login failed";
+  }
+  return "Processing failed after payload validation";
+}

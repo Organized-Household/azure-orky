@@ -1,13 +1,3 @@
-export interface StoryPayload {
-  storyId: string;
-  issueId: string;
-  projectKey: string;
-  summary: string;
-  description: string;
-  acceptanceCriteria: string;
-  epicId: string;
-}
-
 export const EXECUTION_STATES = {
   RECEIVED: "RECEIVED",
   VALIDATED: "VALIDATED",
@@ -18,3 +8,28 @@ export const EXECUTION_STATES = {
 export type ExecutionState =
   (typeof EXECUTION_STATES)[keyof typeof EXECUTION_STATES];
 
+export interface StoryPayload {
+  // Existing compatibility fields used by current repositories/orchestrator
+  storyId: string;
+  issueId?: string;
+  epicId?: string;
+
+  // Explicit Jira/PDE-normalized fields
+  jiraIssueKey: string;
+  jiraIssueId?: string;
+
+  PDEStoryID: string;
+  PDEEpicID?: string;
+
+  projectKey: string;
+  issueType: string;
+  status: string;
+
+  title: string;
+  description: string;
+  acceptanceCriteria: string;
+
+  parentKey?: string;
+  labels?: string[];
+  priority?: string;
+}

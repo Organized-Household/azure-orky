@@ -20,7 +20,7 @@ export class ExecutionFactory {
   ) {}
 
   async createRejectedExecution(
-    validation: Extract<JiraWebhookValidationResult, { kind: "invalid" }>,
+    validation: JiraWebhookValidationResult,
   ): Promise<void> {
     if (!validation.issueId || !validation.storyId) {
       return;
@@ -32,7 +32,7 @@ export class ExecutionFactory {
       projectKey: validation.projectKey,
       status: EXECUTION_STATES.FAILED,
       currentState: EXECUTION_STATES.FAILED,
-      failureReason: validation.missingFields.join(", "),
+      failureReason: (validation.missingFields ?? []).join(", "),
     });
 
     await this.auditLogger.log({
@@ -43,8 +43,7 @@ export class ExecutionFactory {
       status: EXECUTION_STATES.RECEIVED,
       message: "Jira webhook received",
       metadata: {
-        webhookEvent: validation.webhookEvent,
-        targetStatus: validation.targetStatus,
+        targetStatus: validation.status,
       },
     });
 
@@ -62,11 +61,11 @@ export class ExecutionFactory {
   }
 
   async createValidatedExecution(
-    validation: Extract<JiraWebhookValidationResult, { kind: "valid" }>,
+    validation: JiraWebhookValidationResult,
   ): Promise<IntakeSuccess> {
     const execution = await this.executionRepository.create({
-      storyId: validation.storyId,
-      issueId: validation.issueId,
+      storyId: validation.storyId!,
+      issueId: validation.issueId!,
       epicId: validation.epicId,
       projectKey: validation.projectKey,
       status: EXECUTION_STATES.RECEIVED,
@@ -81,8 +80,7 @@ export class ExecutionFactory {
       status: EXECUTION_STATES.RECEIVED,
       message: "Jira webhook received",
       metadata: {
-        webhookEvent: validation.webhookEvent,
-        targetStatus: validation.targetStatus,
+        targetStatus: validation.status,
       },
     });
 
@@ -124,7 +122,7 @@ export class ExecutionFactory {
     try {
       const storyRetrievalService =
         this.storyRetrievalService ?? new StoryRetrievalService();
-      const storyPayload = await storyRetrievalService.retrieve(validation.issueId);
+      const storyPayload = await storyRetrievalService.retrieve(validation.issueId!);
 
       await this.executionRepository.updateState(
         execution.executionId,
@@ -154,7 +152,7 @@ export class ExecutionFactory {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-
+      
       await this.executionRepository.updateState(
         execution.executionId,
         EXECUTION_STATES.FAILED,
