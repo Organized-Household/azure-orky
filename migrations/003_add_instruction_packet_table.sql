@@ -3,16 +3,16 @@ IF NOT EXISTS (
 )
 BEGIN
   CREATE TABLE instruction_packets (
-    packetId        NVARCHAR(36)    NOT NULL PRIMARY KEY,
-    executionId     NVARCHAR(36)    NOT NULL,
-    storyId         NVARCHAR(100)   NOT NULL,
-    targetRepository NVARCHAR(255)  NOT NULL,
-    baseBranch      NVARCHAR(255)   NOT NULL,
-    branchNameHint  NVARCHAR(255)   NOT NULL,
-    fileOperations  NVARCHAR(MAX)   NOT NULL,  -- JSON
-    validationCommands NVARCHAR(MAX) NOT NULL, -- JSON
-    receivedAt      DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
+    packet_id           NVARCHAR(36)        NOT NULL PRIMARY KEY,
+    execution_id        UNIQUEIDENTIFIER    NOT NULL,
+    story_id            NVARCHAR(100)       NOT NULL,
+    target_repository   NVARCHAR(255)       NOT NULL,
+    base_branch         NVARCHAR(255)       NOT NULL,
+    branch_name_hint    NVARCHAR(255)       NOT NULL,
+    file_operations     NVARCHAR(MAX)       NOT NULL,  -- JSON
+    validation_commands NVARCHAR(MAX)       NOT NULL,  -- JSON
+    received_at         DATETIME2           NOT NULL DEFAULT GETUTCDATE(),
     CONSTRAINT FK_InstructionPackets_Executions
-      FOREIGN KEY (executionId) REFERENCES executions(executionId)
+      FOREIGN KEY (execution_id) REFERENCES executions(execution_id)
   );
 END

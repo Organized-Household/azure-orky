@@ -18,24 +18,11 @@ export class InstructionPacketRepository {
       .input('validationCommands', sql.NVarChar(sql.MAX), JSON.stringify(packet.validationCommands))
       .query(`
         INSERT INTO instruction_packets (
-          packetId,
-          executionId,
-          storyId,
-          targetRepository,
-          baseBranch,
-          branchNameHint,
-          fileOperations,
-          validationCommands
-        )
-        VALUES (
-          @packetId,
-          @executionId,
-          @storyId,
-          @targetRepository,
-          @baseBranch,
-          @branchNameHint,
-          @fileOperations,
-          @validationCommands
+          packet_id, execution_id, story_id, target_repository,
+          base_branch, branch_name_hint, file_operations, validation_commands
+        ) VALUES (
+          @packetId, @executionId, @storyId, @targetRepository,
+          @baseBranch, @branchNameHint, @fileOperations, @validationCommands
         )
       `);
   }
