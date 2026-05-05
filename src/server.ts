@@ -2,6 +2,7 @@ import "dotenv/config";
 import http from "http";
 import sql from "mssql";
 import { handleJiraWebhook } from "./webhooks/jiraWebhookController";
+import { ExecutionTraceService } from "./observability/executionTraceService";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -43,6 +44,34 @@ const server = http.createServer(async (req, res) => {
   if (pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", service: "orky-api" }));
+    return;
+  }
+
+  const executionTraceMatch = pathname.match(
+    /^\/executions\/([0-9a-f-]{36})$/i,
+  );
+  if (executionTraceMatch) {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const executionId = executionTraceMatch[1];
+    try {
+      const traceService = new ExecutionTraceService();
+      const trace = await traceService.getTrace(executionId);
+      if (!trace) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Execution not found" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(trace));
+    } catch (err) {
+      console.error("Execution trace query failed:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to retrieve execution trace" }));
+    }
     return;
   }
 
