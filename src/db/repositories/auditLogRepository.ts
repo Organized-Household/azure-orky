@@ -10,6 +10,7 @@ export interface AuditLogInput {
   status: string;
   message?: string;
   metadataJson?: string;
+  timestamp?: Date;
 }
 
 export class AuditLogRepository {
@@ -49,5 +50,30 @@ export class AuditLogRepository {
         )
       `);
   }
+
+async getByExecutionId(executionId: string): Promise<AuditLogInput[]> {
+    const pool = await getDbPool();
+
+    const result = await pool
+      .request()
+      .input("executionId", sql.UniqueIdentifier, executionId)
+      .query(`
+        SELECT
+          execution_id AS executionId,
+          story_id AS storyId,
+          step,
+          state,
+          status,
+          message,
+          metadata_json AS metadataJson,
+          timestamp
+        FROM audit_logs
+        WHERE execution_id = @executionId
+        ORDER BY timestamp ASC
+      `);
+
+    return result.recordset;
+  }
+
 }
 

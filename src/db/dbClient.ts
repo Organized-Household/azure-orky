@@ -17,9 +17,13 @@ export function getDbConfig(): sql.config {
 
 export async function getDbPool(): Promise<sql.ConnectionPool> {
   if (!poolPromise) {
-    poolPromise = new sql.ConnectionPool(getDbConfig()).connect();
+    poolPromise = new sql.ConnectionPool(getDbConfig())
+      .connect()
+      .catch((err) => {
+        poolPromise = undefined;
+        throw err;
+      });
   }
 
   return poolPromise;
 }
-

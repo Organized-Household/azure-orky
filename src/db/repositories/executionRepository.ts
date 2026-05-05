@@ -11,6 +11,9 @@ export interface ExecutionRecord {
   projectKey?: string;
   status: ExecutionState;
   currentState: ExecutionState;
+  startedAt?: Date;
+  completedAt?: Date;
+  failureReason?: string;  
 }
 
 export interface CreateExecutionInput {
@@ -97,5 +100,56 @@ export class ExecutionRepository {
         WHERE execution_id = @executionId
       `);
   }
+
+
+  async getById(executionId: string): Promise<ExecutionRecord | null> {
+    const pool = await getDbPool();
+
+    const result = await pool
+      .request()
+      .input("executionId", sql.UniqueIdentifier, executionId)
+      .query(`
+        SELECT
+          execution_id AS executionId,
+          story_id AS storyId,
+          issue_id AS issueId,
+          epic_id AS epicId,
+          project_key AS projectKey,
+          status,
+          current_state AS currentState,
+          started_at AS startedAt,
+          completed_at AS completedAt,
+          failure_reason AS failureReason
+        FROM executions
+        WHERE execution_id = @executionId
+      `);
+
+    return result.recordset[0] ?? null;
+  }
+
+  async failIfNotTerminal(
+    executionId: string,
+    failureReason: string,
+  ): Promise<void> {
+    const pool = await getDbPool();
+
+    await pool
+      .request()
+      .input("executionId", sql.UniqueIdentifier, executionId)
+      .input("failureReason", sql.NVarChar(sql.MAX), failureReason)
+      .query(`
+        UPDATE executions
+        SET
+          status = 'FAILED',
+          current_state = 'FAILED',
+          failure_reason = @failureReason,
+          completed_at = GETUTCDATE()
+        WHERE execution_id = @executionId
+          AND status NOT IN ('COMPLETED', 'FAILED')
+      `);
+  }
+
 }
+
+
 
