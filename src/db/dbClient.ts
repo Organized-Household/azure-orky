@@ -1,29 +1,15 @@
-import sql from "mssql";
+import { Pool } from 'pg';
 
-let poolPromise: Promise<sql.ConnectionPool> | undefined;
+let pool: Pool | undefined;
 
-export function getDbConfig(): sql.config {
-  return {
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    server: process.env.DB_SERVER || "",
-    database: process.env.DB_NAME,
-    options: {
-      encrypt: true,
-      trustServerCertificate: false,
-    },
-  };
-}
-
-export async function getDbPool(): Promise<sql.ConnectionPool> {
-  if (!poolPromise) {
-    poolPromise = new sql.ConnectionPool(getDbConfig())
-      .connect()
-      .catch((err) => {
-        poolPromise = undefined;
-        throw err;
-      });
+export function getPool(): Pool {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false,
+      },
+    });
   }
-
-  return poolPromise;
+  return pool;
 }

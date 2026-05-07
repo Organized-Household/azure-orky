@@ -1,7 +1,6 @@
-import { randomUUID } from "crypto";
-import sql from "mssql";
-import { getDbPool } from "../dbClient";
-import { EXECUTION_STATES, ExecutionState } from "../../domain/storyPayload";
+import { randomUUID } from 'crypto';
+import { getPool } from '../dbClient';
+import { EXECUTION_STATES, ExecutionState } from '../../domain/storyPayload';
 
 export interface ExecutionRecord {
   executionId: string;
@@ -13,7 +12,7 @@ export interface ExecutionRecord {
   currentState: ExecutionState;
   startedAt?: Date;
   completedAt?: Date;
-  failureReason?: string;  
+  failureReason?: string;
 }
 
 export interface CreateExecutionInput {
@@ -31,40 +30,24 @@ export class ExecutionRepository {
     const executionId = randomUUID();
     const status = input.status ?? EXECUTION_STATES.RECEIVED;
     const currentState = input.currentState ?? EXECUTION_STATES.RECEIVED;
-    const pool = await getDbPool();
+    const pool = getPool();
 
-    await pool
-      .request()
-      .input("executionId", sql.UniqueIdentifier, executionId)
-      .input("storyId", sql.VarChar(255), input.storyId)
-      .input("issueId", sql.VarChar(255), input.issueId ?? null)
-      .input("epicId", sql.VarChar(255), input.epicId ?? null)
-      .input("projectKey", sql.VarChar(50), input.projectKey ?? null)
-      .input("status", sql.VarChar(50), status)
-      .input("currentState", sql.VarChar(50), currentState)
-      .input("failureReason", sql.NVarChar(sql.MAX), input.failureReason ?? null)
-      .query(`
-        INSERT INTO executions (
-          execution_id,
-          story_id,
-          issue_id,
-          epic_id,
-          project_key,
-          status,
-          current_state,
-          failure_reason
-        )
-        VALUES (
-          @executionId,
-          @storyId,
-          @issueId,
-          @epicId,
-          @projectKey,
-          @status,
-          @currentState,
-          @failureReason
-        )
-      `);
+    await pool.query(
+      `INSERT INTO executions (
+        execution_id, story_id, issue_id, epic_id, project_key,
+        status, current_state, failure_reason
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        executionId,
+        input.storyId,
+        input.issueId ?? null,
+        input.epicId ?? null,
+        input.projectKey ?? null,
+        status,
+        currentState,
+        input.failureReason ?? null,
+      ]
+    );
 
     return {
       executionId,
@@ -77,79 +60,51 @@ export class ExecutionRepository {
     };
   }
 
-  async updateState(
-    executionId: string,
-    state: ExecutionState,
-    failureReason?: string,
-  ): Promise<void> {
-    const pool = await getDbPool();
-
-    await pool
-      .request()
-      .input("executionId", sql.UniqueIdentifier, executionId)
-      .input("status", sql.VarChar(50), state)
-      .input("currentState", sql.VarChar(50), state)
-      .input("failureReason", sql.NVarChar(sql.MAX), failureReason ?? null)
-      .query(`
-        UPDATE executions
-        SET
-          status = @status,
-          current_state = @currentState,
-          failure_reason = COALESCE(@failureReason, failure_reason),
-          completed_at = CASE WHEN @status = 'FAILED' THEN GETUTCDATE() ELSE completed_at END
-        WHERE execution_id = @executionId
-      `);
+  async updateState(executionId: string, state: ExecutionState, failureReason?: string): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE executions
+       SET status = $1,
+           current_state = $2,
+           failure_reason = COALESCE($3, failure_reason),
+           completed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE completed_at END
+       WHERE execution_id = $4`,
+      [state, state, failureReason ?? null, executionId]
+    );
   }
-
 
   async getById(executionId: string): Promise<ExecutionRecord | null> {
-    const pool = await getDbPool();
-
-    const result = await pool
-      .request()
-      .input("executionId", sql.UniqueIdentifier, executionId)
-      .query(`
-        SELECT
-          execution_id AS executionId,
-          story_id AS storyId,
-          issue_id AS issueId,
-          epic_id AS epicId,
-          project_key AS projectKey,
-          status,
-          current_state AS currentState,
-          started_at AS startedAt,
-          completed_at AS completedAt,
-          failure_reason AS failureReason
-        FROM executions
-        WHERE execution_id = @executionId
-      `);
-
-    return result.recordset[0] ?? null;
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT
+        execution_id AS "executionId",
+        story_id AS "storyId",
+        issue_id AS "issueId",
+        epic_id AS "epicId",
+        project_key AS "projectKey",
+        status,
+        current_state AS "currentState",
+        started_at AS "startedAt",
+        completed_at AS "completedAt",
+        failure_reason AS "failureReason"
+       FROM executions
+       WHERE execution_id = $1`,
+      [executionId]
+    );
+    return result.rows[0] ?? null;
   }
 
-  async failIfNotTerminal(
-    executionId: string,
-    failureReason: string,
-  ): Promise<void> {
-    const pool = await getDbPool();
-
-    await pool
-      .request()
-      .input("executionId", sql.UniqueIdentifier, executionId)
-      .input("failureReason", sql.NVarChar(sql.MAX), failureReason)
-      .query(`
-        UPDATE executions
-        SET
-          status = 'FAILED',
-          current_state = 'FAILED',
-          failure_reason = @failureReason,
-          completed_at = GETUTCDATE()
-        WHERE execution_id = @executionId
-          AND status NOT IN ('COMPLETED', 'FAILED')
-      `);
+  async failIfNotTerminal(executionId: string, failureReason: string): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE executions
+       SET status = 'FAILED',
+           current_state = 'FAILED',
+           failure_reason = $1,
+           completed_at = NOW()
+       WHERE execution_id = $2
+         AND status NOT IN ('COMPLETED', 'FAILED')`,
+      [failureReason, executionId]
+    );
   }
-
 }
-
-
-
