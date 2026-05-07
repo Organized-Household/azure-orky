@@ -67,9 +67,9 @@ export class ExecutionRepository {
        SET status = $1,
            current_state = $2,
            failure_reason = COALESCE($3, failure_reason),
-           completed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE completed_at END
-       WHERE execution_id = $4`,
-      [state, state, failureReason ?? null, executionId]
+           completed_at = CASE WHEN $4 = 'FAILED' THEN NOW() ELSE completed_at END
+       WHERE execution_id = $5`,
+      [state, state, failureReason ?? null, state, executionId]
     );
   }
 
