@@ -1,5 +1,5 @@
 {
-  "name": "azure-orky",
+  "name": "orky",
   "version": "1.0.0",
   "description": "Orky AI orchestration API hosted on Azure Container Apps.",
   "main": "dist/server.js",
