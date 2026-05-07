@@ -9,7 +9,12 @@
     "dev": "ts-node src/server.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.0",
+    "@types/axios": "^0.9.36",
+    "@types/express": "^5.0.6",
+    "axios": "^1.16.0",
     "dotenv": "^17.2.3",
+    "express": "^5.2.1",
     "mssql": "^12.1.0"
   },
   "devDependencies": {
