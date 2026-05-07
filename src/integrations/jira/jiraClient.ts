@@ -20,24 +20,32 @@ export class JiraClient {
   }
 
   async getIssue(issueId: string): Promise<unknown> {
-    const response = await fetch(
-      `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueId)}`,
-      {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Basic ${Buffer.from(
-            `${this.email}:${this.apiToken}`,
-          ).toString("base64")}`,
-        },
+    const url = `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueId)}`;
+    console.log('[JiraClient] Fetching issue:', url);
+    console.log('[JiraClient] Using email:', this.email);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${Buffer.from(
+          `${this.email}:${this.apiToken}`,
+        ).toString("base64")}`,
       },
-    );
+    });
+
+    console.log('[JiraClient] Response status:', response.status);
 
     if (!response.ok) {
-      throw new Error(`Jira issue fetch failed with status ${response.status}`);
+      const errorBody = await response.text();
+      console.error('[JiraClient] Error body:', errorBody);
+      throw new Error(
+        `Jira issue fetch failed with status ${response.status}: ${errorBody}`
+      );
     }
 
-    return response.json();
+    const data = await response.json();
+    console.log('[JiraClient] Issue key returned:', (data as any)?.key);
+    return data;
   }
 }
-

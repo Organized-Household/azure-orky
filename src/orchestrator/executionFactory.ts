@@ -152,6 +152,8 @@ export class ExecutionFactory {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error('[ExecutionFactory] Pipeline failed with error:', message);
+      console.error('[ExecutionFactory] Full error:', error);
       
       await this.executionRepository.updateState(
         execution.executionId,

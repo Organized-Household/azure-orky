@@ -98,14 +98,38 @@ export class StoryRetrievalService {
   }
 
   async retrieveStory(issueKeyOrId: string): Promise<StoryPayload> {
-    const issue = (await this.jiraClient.getIssue(issueKeyOrId)) as JiraIssue;
-    const fields = issue.fields ?? {};
+    console.log('[StoryRetrieval] retrieveStory called with:', issueKeyOrId);
 
+    let issue: JiraIssue;
+    try {
+      issue = (await this.jiraClient.getIssue(issueKeyOrId)) as JiraIssue;
+      console.log('[StoryRetrieval] Jira response received, issue key:', issue?.key);
+    } catch (error: any) {
+      console.error('[StoryRetrieval] jiraClient.getIssue failed');
+      console.error('[StoryRetrieval] HTTP status:', error?.response?.status);
+      console.error('[StoryRetrieval] Jira error body:', JSON.stringify(error?.response?.data, null, 2));
+      console.error('[StoryRetrieval] Error message:', error?.message);
+      throw error;
+    }
+
+    const fields = issue.fields ?? {};
+    console.log('[StoryRetrieval] Fields received:', Object.keys(fields));
+    console.log('[StoryRetrieval] Raw description:', JSON.stringify(fields.description, null, 2));
+    
     const pdeStoryIdField =
       process.env.JIRA_PDE_STORY_ID_FIELD ?? "customfield_10107";
 
-    const title = required(toPlainText(fields.summary), "summary");
-    const description = required(toPlainText(fields.description), "description");
+    let title: string;
+    let description: string;
+    try {
+      title = required(toPlainText(fields.summary), "summary");
+      description = required(toPlainText(fields.description), "description");
+      console.log('[StoryRetrieval] title:', title);
+      console.log('[StoryRetrieval] description length:', description?.length);
+    } catch (error: any) {
+      console.error('[StoryRetrieval] Required field validation failed:', error?.message);
+      throw error;
+    }
 
     const acceptanceCriteria =
       findAcceptanceCriteria(fields) ?? description;
