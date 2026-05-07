@@ -137,7 +137,7 @@ Return JSON matching this exact schema:
   "fileOperations": [
     {
       "operation": "create" | "modify" | "replace" | "delete",
-      "filePath": "<relative file path>",
+      "path": "<relative file path>",
       "content": "<file content for create/modify/replace>"
     }
   ],
