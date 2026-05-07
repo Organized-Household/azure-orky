@@ -64,14 +64,10 @@ export async function handleJiraWebhook(
       storyId: result.storyId,
       status: result.status,
     });
-  } catch (error) {
+  } } catch (error) {
     const detail = getSafeProcessingFailureDetail(error);
     console.error("Jira webhook processing failed", { detail });
-    sendJson(res, 502, {
-      error: "Jira story retrieval failed",
-      ...(shouldIncludeLocalDetails() ? { detail } : {}),
-    });
-  }
+    console.error("RAW ERROR:", error instanceof Error ? error.stack : String(error));
 }
 
 function readRequestBody(req: IncomingMessage): Promise<string> {
