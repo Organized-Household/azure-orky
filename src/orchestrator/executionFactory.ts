@@ -63,8 +63,11 @@ export class ExecutionFactory {
   async createValidatedExecution(
     validation: JiraWebhookValidationResult,
   ): Promise<IntakeSuccess> {
+    const storyId = validation.storyId!;
+
+    // Create execution record first so we have an executionId for the lock
     const execution = await this.executionRepository.create({
-      storyId: validation.storyId!,
+      storyId,
       issueId: validation.issueId!,
       epicId: validation.epicId,
       projectKey: validation.projectKey,
@@ -84,13 +87,48 @@ export class ExecutionFactory {
       },
     });
 
+    // Attempt to acquire the execution lock for this story
+    const lockAcquired = await this.executionRepository.acquireLock(
+      storyId,
+      execution.executionId,
+    );
+
+    if (!lockAcquired) {
+      // Another execution is already active for this story — mark this one failed and stop
+      console.warn(
+        `[ExecutionFactory] Duplicate trigger ignored for story ${storyId} — active execution lock exists`,
+      );
+
+      await this.executionRepository.updateState(
+        execution.executionId,
+        EXECUTION_STATES.FAILED,
+        "Duplicate trigger: active execution already exists for this story",
+      );
+
+      await this.auditLogger.log({
+        executionId: execution.executionId,
+        storyId: execution.storyId,
+        step: "duplicate_trigger_rejected",
+        state: EXECUTION_STATES.FAILED,
+        status: EXECUTION_STATES.FAILED,
+        message: "Duplicate webhook trigger rejected — execution lock already held",
+        metadata: {
+          storyId,
+        },
+      });
+
+      throw new Error(
+        `Duplicate trigger: active execution already exists for story ${storyId}`,
+      );
+    }
+
     await this.auditLogger.log({
       executionId: execution.executionId,
       storyId: execution.storyId,
       step: "execution_created",
       state: EXECUTION_STATES.RECEIVED,
       status: EXECUTION_STATES.RECEIVED,
-      message: "Execution record created",
+      message: "Execution record created and lock acquired",
     });
 
     await this.executionRepository.updateState(
@@ -152,14 +190,16 @@ export class ExecutionFactory {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[ExecutionFactory] Pipeline failed with error:', message);
-      console.error('[ExecutionFactory] Full error:', error);
-      
+      console.error("[ExecutionFactory] Pipeline failed with error:", message);
+      console.error("[ExecutionFactory] Full error:", error);
+
       await this.executionRepository.updateState(
         execution.executionId,
         EXECUTION_STATES.FAILED,
         message,
       );
+
+      await this.executionRepository.releaseLock(storyId);
 
       await this.auditLogger.log({
         executionId: execution.executionId,

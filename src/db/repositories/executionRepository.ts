@@ -107,4 +107,43 @@ export class ExecutionRepository {
       [failureReason, executionId]
     );
   }
+
+  /**
+   * Attempt to acquire an execution lock for a story.
+   * Returns true if the lock was acquired, false if a lock already exists
+   * for this story_id and has not expired.
+   * Uses INSERT ... ON CONFLICT DO NOTHING for atomic idempotency.
+   */
+  async acquireLock(storyId: string, executionId: string): Promise<boolean> {
+    const pool = getPool();
+
+    // First expire any stale locks for this story
+    await pool.query(
+      `DELETE FROM execution_locks
+       WHERE story_id = $1
+         AND expires_at < NOW()`,
+      [storyId]
+    );
+
+    // Attempt to insert the lock — will fail silently if story_id already exists
+    const result = await pool.query(
+      `INSERT INTO execution_locks (story_id, execution_id, status, acquired_at, expires_at)
+       VALUES ($1, $2, 'active', NOW(), NOW() + INTERVAL '2 hours')
+       ON CONFLICT (story_id) DO NOTHING`,
+      [storyId, executionId]
+    );
+
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Release the execution lock for a story when the execution reaches a terminal state.
+   */
+  async releaseLock(storyId: string): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `DELETE FROM execution_locks WHERE story_id = $1`,
+      [storyId]
+    );
+  }
 }
