@@ -5,6 +5,7 @@ import { RepositoryManager } from './repositoryManager';
 import { PullRequestManager } from './pullRequestManager';
 import { WorkspaceManager } from '../../agents/workspaceManager';
 import { ExecutionState } from '../../domain/storyPayload';
+import { CiStatusMonitor } from './ciStatusMonitor';
 
 export interface PrOrchestratorInput {
   executionId: string;
@@ -21,6 +22,7 @@ export class PrOrchestrator {
   private repositoryManager = new RepositoryManager();
   private pullRequestManager = new PullRequestManager();
   private workspaceManager = new WorkspaceManager();
+  private ciStatusMonitor = new CiStatusMonitor();
 
   async run(input: PrOrchestratorInput): Promise<void> {
     const { executionId, storyId, storyTitle, branchNameHint, targetRepository } = input;
@@ -90,6 +92,46 @@ export class PrOrchestrator {
         message: `Pull request opened: ${prUrl} (PR #${prNumber})`,
         metadata: { prUrl, prNumber, branchName },
       });
+
+      // STORY-5.1: Snapshot GitHub Actions CI status immediately after PR creation.
+      // Checks are usually pending at this point; this captures any fast failures
+      // and provides an audit trail of the CI state at the moment the PR was opened.
+      try {
+        const ciStatus = await this.ciStatusMonitor.fetchStatus(
+          repositoryOwner,
+          repositoryName,
+          headSha,
+        );
+        await this.auditLogger.log({
+          executionId,
+          storyId,
+          step: 'ci_status_snapshot',
+          state: 'PR_CREATED',
+          status: ciStatus.failed > 0 ? 'warn' : 'info',
+          message: ciStatus.total === 0
+            ? 'No CI checks found yet — checks may not have started.'
+            : `CI snapshot: ${ciStatus.passed} passed, ${ciStatus.failed} failed, ${ciStatus.pending} pending.`,
+          metadata: {
+            total: ciStatus.total,
+            passed: ciStatus.passed,
+            failed: ciStatus.failed,
+            pending: ciStatus.pending,
+            allPassed: ciStatus.allPassed,
+            failedChecks: ciStatus.failedChecks,
+          },
+        });
+      } catch (ciError) {
+        // Non-fatal: CI status snapshot failure must not block PR_CREATED
+        const reason = ciError instanceof Error ? ciError.message : String(ciError);
+        await this.auditLogger.log({
+          executionId,
+          storyId,
+          step: 'ci_status_snapshot_failed',
+          state: 'PR_CREATED',
+          status: 'warn',
+          message: `CI status check could not be fetched: ${reason}`,
+        });
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await this.auditLogger.log({
