@@ -176,11 +176,35 @@ export class PrOrchestrator {
         step: 'ci_gate_passed',
         state: 'CI_PASSED',
         status: 'success',
-        message: 'All CI checks passed. Proceeding to auto-merge.',
+        message: 'All CI checks passed.',
         metadata: { checkSummary: pollResult.checkSummary },
       });
 
-      // STORY-5.3: Auto-merge
+      // AUTO_MERGE feature flag — set AUTO_MERGE=1 in Railway to enable
+      const autoMergeEnabled = process.env.AUTO_MERGE === '1';
+
+      if (!autoMergeEnabled) {
+        await this.auditLogger.log({
+          executionId,
+          storyId,
+          step: 'auto_merge_skipped',
+          state: 'CI_PASSED',
+          status: 'info',
+          message: 'AUTO_MERGE is not enabled. PR is ready for manual review and merge. Set AUTO_MERGE=1 in Railway to enable automatic merging.',
+        });
+        await this.executionRepo.updateState(executionId, 'COMPLETED' as ExecutionState);
+        await this.auditLogger.log({
+          executionId,
+          storyId,
+          step: 'execution_completed',
+          state: 'COMPLETED',
+          status: 'success',
+          message: 'Execution completed. PR is open and CI passed — awaiting manual merge.',
+        });
+        return;
+      }
+
+      // STORY-5.3: Auto-merge (AUTO_MERGE=1)
       const mergeController = new MergeController(octokit, this.auditLogger);
       const { mergeSha } = await mergeController.merge({
         executionId,
