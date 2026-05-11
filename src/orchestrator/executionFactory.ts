@@ -9,8 +9,8 @@ import { ForgeOrchestrator } from "./forgeOrchestrator";
 import { RepositoryMutationExecutor } from "../agents/repositoryMutationExecutor";
 import { PrOrchestrator } from "../integrations/github/prOrchestrator";
 import { JiraUpdater } from "../integrations/jira/jiraUpdater";
-import { FailureReporter } from "../integrations/jira/failureReporter";
 import { RepoChangeSetRepository } from "../db/repositories/repoChangeSetRepository";
+import { FailureHandler } from "./failureHandler";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
 
 export interface IntakeSuccess {
@@ -169,6 +169,8 @@ export class ExecutionFactory {
       EXECUTION_STATES.VALIDATED,
     );
 
+    let currentState: string = EXECUTION_STATES.VALIDATED;
+
     await this.auditLogger.log({
       executionId: execution.executionId,
       storyId: execution.storyId,
@@ -201,6 +203,7 @@ export class ExecutionFactory {
         execution.executionId,
         EXECUTION_STATES.STORY_FETCHED,
       );
+      currentState = EXECUTION_STATES.STORY_FETCHED;
 
       await this.auditLogger.log({
         executionId: execution.executionId,
@@ -225,10 +228,12 @@ export class ExecutionFactory {
       );
 
       const packet = await forgeOrchestrator.run(execution.executionId, storyPayload);
+      currentState = EXECUTION_STATES.PACKET_VALIDATED;
 
       // EPIC-3: Execute repository mutations
       const mutationExecutor = new RepositoryMutationExecutor();
       await mutationExecutor.execute(execution.executionId, storyPayload.storyId, packet);
+      currentState = EXECUTION_STATES.CHANGES_PREPARED;
 
       // EPIC-4 + 5: Branch, commit, PR, CI gate, auto-merge → COMPLETED
       const prOrchestrator = new PrOrchestrator();
@@ -275,46 +280,22 @@ export class ExecutionFactory {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error("[ExecutionFactory] Pipeline failed with error:", message);
-      console.error("[ExecutionFactory] Full error:", error);
+      console.error("[ExecutionFactory] Pipeline failed:", message);
 
-      // Capture state before transitioning to FAILED (for the Jira failure comment)
-      const currentExecution = await this.executionRepository.getById(execution.executionId);
-      const failedAtState = currentExecution?.currentState ?? 'UNKNOWN';
-
-      await this.executionRepository.updateState(
-        execution.executionId,
-        EXECUTION_STATES.FAILED,
-        message,
+      const failureHandler = new FailureHandler(
+        this.executionRepository,
+        new RepoChangeSetRepository(),
+        new InstructionPacketRepository(),
+        this.auditLogger,
       );
 
-      await this.executionRepository.releaseLock(storyId);
-
-      await this.auditLogger.log({
+      await failureHandler.handle({
         executionId: execution.executionId,
         storyId: execution.storyId,
-        step: "pipeline_failed",
-        state: EXECUTION_STATES.FAILED,
-        status: EXECUTION_STATES.FAILED,
-        message: "Pipeline execution failed",
-        metadata: {
-          error: message,
-          failedAtState,
-          issueId: validation.issueId,
-        },
+        failedAtState: currentState,
+        failureReason: message,
+        storyPayload,
       });
-
-      // STORY-6.1: Report failure to Jira (non-blocking, only if story was fetched)
-      if (storyPayload) {
-        const failureReporter = new FailureReporter(this.auditLogger);
-        await failureReporter.reportFailure({
-          executionId: execution.executionId,
-          storyId: storyPayload.storyId,
-          issueKey: storyPayload.jiraIssueKey,
-          failedAtState,
-          failureReason: message,
-        });
-      }
 
       throw error;
     }

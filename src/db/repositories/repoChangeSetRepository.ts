@@ -52,10 +52,10 @@ export class RepoChangeSetRepository {
 
   async getPrDataByExecutionId(
     executionId: string,
-  ): Promise<{ prUrl: string | null; mergeSha: string | null } | null> {
+  ): Promise<{ prUrl: string | null; mergeSha: string | null; branchName: string | null } | null> {
     const pool = getPool();
     const result = await pool.query(
-      `SELECT pr_url AS "prUrl", merge_sha AS "mergeSha"
+      `SELECT pr_url AS "prUrl", merge_sha AS "mergeSha", branch_name AS "branchName"
        FROM repo_change_sets
        WHERE execution_id = $1
        LIMIT 1`,
