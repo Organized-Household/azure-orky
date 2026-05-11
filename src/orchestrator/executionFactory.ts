@@ -244,6 +244,9 @@ export class ExecutionFactory {
         storyTitle: storyPayload.title,
         branchNameHint: packet.branchNameHint,
         targetRepository: packet.targetRepository,
+        prTitle: packet.prTitle,
+        prBody: packet.prBody,
+        commitMessage: packet.commitMessage,
       });
 
       // STORY-6.1 + 6.2: Write back to Jira on success (non-blocking)
@@ -283,7 +286,7 @@ export class ExecutionFactory {
           epicId: storyPayload.PDEEpicID ?? storyPayload.epicId ?? undefined,
           storyId: storyPayload.storyId,
           filesChanged: packet.fileOperations.map((op) => `${op.operation}: ${op.path}`).join('\n'),
-          patternsUsed: 'Implementation summary not yet available (STORY-9.4 will populate this)',
+          patternsUsed: packet.implementationSummary,
           migrationApplied:
             packet.fileOperations
               .filter((op) => op.path.startsWith('migrations/'))

@@ -24,6 +24,7 @@ export class RepositoryManager {
     executionId: string,
     storyId: string,
     storyTitle: string,
+    commitMessage?: string,
   ): BranchCommitResult {
     const sanitized = branchNameHint
       .toLowerCase()
@@ -39,11 +40,13 @@ export class RepositoryManager {
     exec('git add -A', workspacePath);
 
     const commitMsgFile = path.join(workspacePath, '.git', 'ORKY_COMMIT_MSG');
-    const commitBody = [
-      `feat: ${storyTitle.replace(/\r?\n/g, ' ').slice(0, 72)}`,
-      '',
-      `Automated commit by Orky for story ${storyId}`,
-    ].join('\n');
+    const commitBody =
+      commitMessage ??
+      [
+        `feat: ${storyTitle.replace(/\r?\n/g, ' ').slice(0, 72)}`,
+        '',
+        `Automated commit by Orky for story ${storyId}`,
+      ].join('\n');
     fs.writeFileSync(commitMsgFile, commitBody, 'utf8');
     exec('git commit -F .git/ORKY_COMMIT_MSG', workspacePath);
 
