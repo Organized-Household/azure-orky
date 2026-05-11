@@ -50,6 +50,20 @@ export class RepoChangeSetRepository {
     );
   }
 
+  async getPrDataByExecutionId(
+    executionId: string,
+  ): Promise<{ prUrl: string | null; mergeSha: string | null } | null> {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT pr_url AS "prUrl", merge_sha AS "mergeSha"
+       FROM repo_change_sets
+       WHERE execution_id = $1
+       LIMIT 1`,
+      [executionId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async updateMergeSha(executionId: string, mergeSha: string): Promise<void> {
     const pool = getPool();
     await pool.query(
