@@ -6,6 +6,9 @@ import { PullRequestManager } from './pullRequestManager';
 import { WorkspaceManager } from '../../agents/workspaceManager';
 import { ExecutionState } from '../../domain/storyPayload';
 import { CiStatusMonitor } from './ciStatusMonitor';
+import { CiPoller } from './ciPoller';
+import { MergeController } from './mergeController';
+import { createOctokit } from './githubClient';
 
 export interface PrOrchestratorInput {
   executionId: string;
@@ -132,6 +135,78 @@ export class PrOrchestrator {
           message: `CI status check could not be fetched: ${reason}`,
         });
       }
+
+      // STORY-5.2: CI gate — poll until all checks complete or timeout
+      await this.executionRepo.updateState(executionId, 'CI_PENDING' as ExecutionState);
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'ci_gate_started',
+        state: 'CI_PENDING',
+        status: 'info',
+        message: `Entered CI_PENDING. Polling checks for head SHA: ${headSha.slice(0, 7)}`,
+      });
+
+      const octokit = createOctokit();
+      const ciPoller = new CiPoller(octokit, this.auditLogger);
+      const pollResult = await ciPoller.pollUntilComplete({
+        executionId,
+        storyId,
+        owner: repositoryOwner,
+        repo: repositoryName,
+        ref: headSha,
+      });
+
+      if (!pollResult.allPassed) {
+        throw new Error(pollResult.failureReason ?? 'CI checks did not pass. Auto-merge aborted.');
+      }
+
+      // STORY-5.2: CI passed
+      await this.executionRepo.updateState(executionId, 'CI_PASSED' as ExecutionState);
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'ci_gate_passed',
+        state: 'CI_PASSED',
+        status: 'success',
+        message: 'All CI checks passed. Proceeding to auto-merge.',
+        metadata: { checkSummary: pollResult.checkSummary },
+      });
+
+      // STORY-5.3: Auto-merge
+      const mergeController = new MergeController(octokit, this.auditLogger);
+      const { mergeSha } = await mergeController.merge({
+        executionId,
+        storyId,
+        owner: repositoryOwner,
+        repo: repositoryName,
+        pullNumber: prNumber,
+        expectedHeadSha: headSha,
+      });
+
+      await this.changeSetRepo.updateMergeSha(executionId, mergeSha);
+
+      await this.executionRepo.updateState(executionId, 'MERGED' as ExecutionState);
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'pr_merged',
+        state: 'MERGED',
+        status: 'success',
+        message: `PR #${prNumber} merged. Merge SHA: ${mergeSha}`,
+        metadata: { mergeSha },
+      });
+
+      await this.executionRepo.updateState(executionId, 'COMPLETED' as ExecutionState);
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'execution_completed',
+        state: 'COMPLETED',
+        status: 'success',
+        message: 'Execution completed successfully.',
+      });
+
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await this.auditLogger.log({
