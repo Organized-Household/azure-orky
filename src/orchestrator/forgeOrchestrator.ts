@@ -27,7 +27,7 @@ export class ForgeOrchestrator {
       step: 'artifacts_resolved',
       state: EXECUTION_STATES.ARTIFACTS_RESOLVED,
       status: 'succeeded',
-      message: 'PDE artifact resolution complete (stub)',
+      message: 'Context assembly will occur inside Forge invocation (project context, history, snapshot)',
     });
 
     await this.executionRepo.updateState(executionId, EXECUTION_STATES.FORGE_INVOKED);

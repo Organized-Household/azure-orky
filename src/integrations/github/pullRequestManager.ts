@@ -12,16 +12,19 @@ export class PullRequestManager {
     branchName: string,
     storyId: string,
     storyTitle: string,
+    prTitle?: string,
+    prBody?: string,
   ): Promise<PullRequestResult> {
     const octokit = createOctokit();
-    const safeTitle = storyTitle.replace(/\r?\n/g, ' ').slice(0, 72);
+    const title = prTitle ?? `[${storyId}] ${storyTitle.replace(/\r?\n/g, ' ').slice(0, 72)}`;
+    const body = prBody ?? `Automated PR created by Orky for story ${storyId}.\n\n**Story:** ${storyTitle}`;
     const response = await octokit.pulls.create({
       owner: repositoryOwner,
       repo: repositoryName,
-      title: `[${storyId}] ${safeTitle}`,
+      title,
       head: branchName,
       base: 'dev',
-      body: `Automated PR created by Orky for story ${storyId}.\n\n**Story:** ${safeTitle}`,
+      body,
     });
     return {
       prUrl: response.data.html_url,

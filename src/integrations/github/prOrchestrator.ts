@@ -16,6 +16,10 @@ export interface PrOrchestratorInput {
   storyTitle: string;
   branchNameHint: string;
   targetRepository: string;
+  // STORY-9.4: From extended DIP
+  prTitle?: string;
+  prBody?: string;
+  commitMessage?: string;
 }
 
 export class PrOrchestrator {
@@ -61,6 +65,7 @@ export class PrOrchestrator {
         executionId,
         storyId,
         storyTitle,
+        input.commitMessage,
       );
 
       await this.auditLogger.log({
@@ -79,6 +84,8 @@ export class PrOrchestrator {
         branchName,
         storyId,
         storyTitle,
+        input.prTitle,
+        input.prBody,
       );
 
       await this.changeSetRepo.updateBranchAndPr(executionId, branchName, commitSha, prUrl, headSha);

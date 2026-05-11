@@ -15,7 +15,18 @@ export class InstructionValidator {
 
     const p = packet as Record<string, unknown>;
 
-    for (const field of ['packetId', 'storyId', 'targetRepository', 'baseBranch', 'branchNameHint'] as const) {
+    for (const field of [
+      'packetId',
+      'storyId',
+      'targetRepository',
+      'baseBranch',
+      'branchNameHint',
+      'prTitle',
+      'prBody',
+      'commitMessage',
+      'implementationSummary',
+      'jiraLinkage',
+    ] as const) {
       if (!p[field] || typeof p[field] !== 'string' || (p[field] as string).trim() === '') {
         return { valid: false, reason: `Missing or empty required field: ${field}` };
       }

@@ -10,6 +10,7 @@ import { RepositoryMutationExecutor } from "../agents/repositoryMutationExecutor
 import { PrOrchestrator } from "../integrations/github/prOrchestrator";
 import { JiraUpdater } from "../integrations/jira/jiraUpdater";
 import { RepoChangeSetRepository } from "../db/repositories/repoChangeSetRepository";
+import { DecisionLogRepository } from "../db/repositories/decisionLogRepository";
 import { FailureHandler } from "./failureHandler";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
 
@@ -243,6 +244,9 @@ export class ExecutionFactory {
         storyTitle: storyPayload.title,
         branchNameHint: packet.branchNameHint,
         targetRepository: packet.targetRepository,
+        prTitle: packet.prTitle,
+        prBody: packet.prBody,
+        commitMessage: packet.commitMessage,
       });
 
       // STORY-6.1 + 6.2: Write back to Jira on success (non-blocking)
@@ -268,6 +272,41 @@ export class ExecutionFactory {
           state: "COMPLETED",
           status: "warn",
           message: `Jira success update failed (execution already COMPLETED): ${jiraErr instanceof Error ? jiraErr.message : String(jiraErr)}`,
+        });
+      }
+
+      // STORY-9.2: Write decision log after every COMPLETED execution (non-blocking)
+      try {
+        const changeSet = await new RepoChangeSetRepository().getPrDataByExecutionId(
+          execution.executionId,
+        );
+        const decisionLogRepo = new DecisionLogRepository();
+        await decisionLogRepo.write({
+          executionId: execution.executionId,
+          epicId: storyPayload.PDEEpicID ?? storyPayload.epicId ?? undefined,
+          storyId: storyPayload.storyId,
+          filesChanged: packet.fileOperations.map((op) => `${op.operation}: ${op.path}`).join('\n'),
+          patternsUsed: packet.implementationSummary,
+          migrationApplied:
+            packet.fileOperations
+              .filter((op) => op.path.startsWith('migrations/'))
+              .map((op) => op.path)
+              .join(', ') || undefined,
+          summary:
+            `Story: ${storyPayload.title}\n` +
+            `PR: ${changeSet?.prUrl ?? 'unknown'}\n` +
+            `Merge SHA: ${changeSet?.mergeSha ?? 'unknown'}\n` +
+            `Files changed: ${packet.fileOperations.length}`,
+        });
+      } catch (decisionLogError: unknown) {
+        const msg = decisionLogError instanceof Error ? decisionLogError.message : String(decisionLogError);
+        await this.auditLogger.log({
+          executionId: execution.executionId,
+          storyId: storyPayload.storyId,
+          step: 'decision_log_write_failed',
+          state: 'COMPLETED',
+          status: 'warn',
+          message: `Decision log write failed (execution still COMPLETED): ${msg}`,
         });
       }
 
