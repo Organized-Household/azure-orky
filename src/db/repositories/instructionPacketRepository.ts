@@ -2,6 +2,18 @@ import { getPool } from '../dbClient';
 import { InstructionPacket } from '../../domain/instructionPacket';
 
 export class InstructionPacketRepository {
+  async getTargetRepositoryByExecutionId(executionId: string): Promise<string | null> {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT target_repository AS "targetRepository"
+       FROM instruction_packets
+       WHERE execution_id = $1
+       LIMIT 1`,
+      [executionId],
+    );
+    return result.rows[0]?.targetRepository ?? null;
+  }
+
   async save(executionId: string, packet: InstructionPacket): Promise<void> {
     const pool = getPool();
 
