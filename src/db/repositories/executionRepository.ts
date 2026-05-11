@@ -146,4 +146,21 @@ export class ExecutionRepository {
       [storyId]
     );
   }
+
+  /**
+   * Returns true if a non-failed execution already exists for this storyId.
+   * Used for idempotency: prevents re-processing a story that is already
+   * active or has completed successfully.
+   */
+  async hasActiveOrCompletedExecution(storyId: string): Promise<boolean> {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT 1 FROM executions
+       WHERE story_id = $1
+         AND status NOT IN ('FAILED')
+       LIMIT 1`,
+      [storyId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
 }

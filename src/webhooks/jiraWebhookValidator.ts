@@ -39,18 +39,12 @@ function getTargetStatus(payload: Record<string, any>): string | undefined {
     return fieldName?.toLowerCase() === "status";
   });
 
-  const statusRecord = asRecord(statusItem);
-  const toString = toPlainText(statusRecord.toString);
-
-  if (toString) {
-    return toString;
+  if (!statusItem) {
+    return undefined;
   }
 
-  const issue = asRecord(payload.issue);
-  const fields = asRecord(issue.fields);
-  const status = asRecord(fields.status);
-
-  return toPlainText(status.name);
+  const statusRecord = asRecord(statusItem);
+  return toPlainText(statusRecord.toString);
 }
 
 export function validateJiraWebhookPayload(

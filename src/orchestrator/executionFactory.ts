@@ -17,6 +17,13 @@ export interface IntakeSuccess {
   storyPayload: StoryPayload;
 }
 
+export interface IntakeIgnored {
+  received: true;
+  ignored: true;
+  reason: string;
+  storyId: string;
+}
+
 export class ExecutionFactory {
   constructor(
     private readonly executionRepository = new ExecutionRepository(),
@@ -67,8 +74,25 @@ export class ExecutionFactory {
 
   async createValidatedExecution(
     validation: JiraWebhookValidationResult,
-  ): Promise<IntakeSuccess> {
+  ): Promise<IntakeSuccess | IntakeIgnored> {
     const storyId = validation.storyId!;
+
+    // Idempotency gate: if a non-failed execution already exists for this
+    // story, silently ignore the trigger. This handles:
+    // 1. Jira at-least-once webhook delivery (same event delivered twice)
+    // 2. Non-status field edits on a story that completed a prior execution
+    const alreadyProcessed = await this.executionRepository.hasActiveOrCompletedExecution(storyId);
+    if (alreadyProcessed) {
+      console.info(
+        `[ExecutionFactory] Idempotency gate: execution already exists for story ${storyId} — ignoring trigger`,
+      );
+      return {
+        received: true,
+        ignored: true,
+        reason: 'execution_already_exists',
+        storyId,
+      };
+    }
 
     // Create execution record first so we have an executionId for the lock
     const execution = await this.executionRepository.create({

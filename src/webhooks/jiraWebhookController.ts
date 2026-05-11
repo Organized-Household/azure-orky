@@ -58,11 +58,23 @@ export async function handleJiraWebhook(
   // Happy path: valid triggering event with all required fields
   try {
     const result = await executionFactory.createValidatedExecution(validation);
+
+    // Idempotency: prior execution already exists — return 200 silently
+    if ('ignored' in result && result.ignored === true) {
+      sendJson(res, 200, {
+        received: true,
+        ignored: true,
+        reason: result.reason,
+        storyId: result.storyId,
+      });
+      return;
+    }
+
     sendJson(res, 200, {
       received: result.received,
-      executionId: result.executionId,
+      executionId: (result as import('../orchestrator/executionFactory').IntakeSuccess).executionId,
       storyId: result.storyId,
-      status: result.status,
+      status: (result as import('../orchestrator/executionFactory').IntakeSuccess).status,
     });
   } catch (error) {
     const detail = getSafeProcessingFailureDetail(error);
