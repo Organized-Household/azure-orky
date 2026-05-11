@@ -7,13 +7,14 @@ import { InstructionValidator } from "../integrations/forge/instructionValidator
 import { StoryRetrievalService } from "../integrations/jira/storyRetrievalService";
 import { ForgeOrchestrator } from "./forgeOrchestrator";
 import { RepositoryMutationExecutor } from "../agents/repositoryMutationExecutor";
+import { PrOrchestrator } from "../integrations/github/prOrchestrator";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
 
 export interface IntakeSuccess {
   received: true;
   executionId: string;
   storyId: string;
-  status: "PACKET_VALIDATED";
+  status: "PR_CREATED";
   storyPayload: StoryPayload;
 }
 
@@ -224,11 +225,21 @@ export class ExecutionFactory {
       const mutationExecutor = new RepositoryMutationExecutor();
       await mutationExecutor.execute(execution.executionId, storyPayload.storyId, packet);
 
+      // EPIC-4: Create branch, commit changes, open PR
+      const prOrchestrator = new PrOrchestrator();
+      await prOrchestrator.run({
+        executionId: execution.executionId,
+        storyId: storyPayload.storyId,
+        storyTitle: storyPayload.title,
+        branchNameHint: packet.branchNameHint,
+        targetRepository: packet.targetRepository,
+      });
+
       return {
         received: true,
         executionId: execution.executionId,
         storyId: storyPayload.storyId,
-        status: EXECUTION_STATES.PACKET_VALIDATED,
+        status: 'PR_CREATED',
         storyPayload,
       };
     } catch (error) {
