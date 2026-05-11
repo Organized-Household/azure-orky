@@ -1,28 +1,16 @@
 {
-  "name": "orky",
+  "name": "orky-ci-monitor",
   "version": "1.0.0",
-  "description": "Orky AI orchestration API hosted on Azure Container Apps.",
-  "main": "dist/server.js",
+  "description": "GitHub Actions CI/CD monitoring service",
+  "main": "src/services/ci-monitor.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "ts-node src/server.ts"
+    "start": "node src/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.0",
-    "@types/axios": "^0.9.36",
-    "@types/express": "^5.0.6",
-    "@types/pg": "^8.20.0",
-    "axios": "^1.16.0",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
-    "mssql": "^12.1.0",
-    "pg": "^8.20.0"
+    "@octokit/rest": "^19.0.11",
+    "winston": "^3.11.0"
   },
-  "devDependencies": {
-    "@types/mssql": "^12.3.0",
-    "@types/node": "^24.10.1",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
