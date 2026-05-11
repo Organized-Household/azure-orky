@@ -8,13 +8,16 @@ import { StoryRetrievalService } from "../integrations/jira/storyRetrievalServic
 import { ForgeOrchestrator } from "./forgeOrchestrator";
 import { RepositoryMutationExecutor } from "../agents/repositoryMutationExecutor";
 import { PrOrchestrator } from "../integrations/github/prOrchestrator";
+import { JiraUpdater } from "../integrations/jira/jiraUpdater";
+import { FailureReporter } from "../integrations/jira/failureReporter";
+import { RepoChangeSetRepository } from "../db/repositories/repoChangeSetRepository";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
 
 export interface IntakeSuccess {
   received: true;
   executionId: string;
   storyId: string;
-  status: "PR_CREATED";
+  status: "COMPLETED";
   storyPayload: StoryPayload;
 }
 
@@ -187,10 +190,12 @@ export class ExecutionFactory {
       },
     });
 
+    let storyPayload: StoryPayload | undefined;
+
     try {
       const storyRetrievalService =
         this.storyRetrievalService ?? new StoryRetrievalService();
-      const storyPayload = await storyRetrievalService.retrieve(validation.issueId!);
+      storyPayload = await storyRetrievalService.retrieve(validation.issueId!);
 
       await this.executionRepository.updateState(
         execution.executionId,
@@ -225,7 +230,7 @@ export class ExecutionFactory {
       const mutationExecutor = new RepositoryMutationExecutor();
       await mutationExecutor.execute(execution.executionId, storyPayload.storyId, packet);
 
-      // EPIC-4: Create branch, commit changes, open PR
+      // EPIC-4 + 5: Branch, commit, PR, CI gate, auto-merge → COMPLETED
       const prOrchestrator = new PrOrchestrator();
       await prOrchestrator.run({
         executionId: execution.executionId,
@@ -235,17 +240,47 @@ export class ExecutionFactory {
         targetRepository: packet.targetRepository,
       });
 
+      // STORY-6.1 + 6.2: Write back to Jira on success (non-blocking)
+      try {
+        const changeSetRepo = new RepoChangeSetRepository();
+        const prData = await changeSetRepo.getPrDataByExecutionId(execution.executionId);
+        if (prData?.prUrl && prData?.mergeSha) {
+          const jiraUpdater = new JiraUpdater(this.auditLogger);
+          await jiraUpdater.reportSuccess({
+            executionId: execution.executionId,
+            storyId: storyPayload.storyId,
+            issueKey: storyPayload.jiraIssueKey,
+            prUrl: prData.prUrl,
+            mergeSha: prData.mergeSha,
+          });
+        }
+      } catch (jiraErr: unknown) {
+        // Jira write-back failure must not retroactively fail a COMPLETED execution
+        await this.auditLogger.log({
+          executionId: execution.executionId,
+          storyId: storyPayload.storyId,
+          step: "jira_success_update_failed",
+          state: "COMPLETED",
+          status: "warn",
+          message: `Jira success update failed (execution already COMPLETED): ${jiraErr instanceof Error ? jiraErr.message : String(jiraErr)}`,
+        });
+      }
+
       return {
         received: true,
         executionId: execution.executionId,
         storyId: storyPayload.storyId,
-        status: 'PR_CREATED',
+        status: 'COMPLETED',
         storyPayload,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[ExecutionFactory] Pipeline failed with error:", message);
       console.error("[ExecutionFactory] Full error:", error);
+
+      // Capture state before transitioning to FAILED (for the Jira failure comment)
+      const currentExecution = await this.executionRepository.getById(execution.executionId);
+      const failedAtState = currentExecution?.currentState ?? 'UNKNOWN';
 
       await this.executionRepository.updateState(
         execution.executionId,
@@ -258,15 +293,28 @@ export class ExecutionFactory {
       await this.auditLogger.log({
         executionId: execution.executionId,
         storyId: execution.storyId,
-        step: "jira_story_fetch_failed",
+        step: "pipeline_failed",
         state: EXECUTION_STATES.FAILED,
         status: EXECUTION_STATES.FAILED,
-        message: "Full Jira story fetch failed",
+        message: "Pipeline execution failed",
         metadata: {
           error: message,
+          failedAtState,
           issueId: validation.issueId,
         },
       });
+
+      // STORY-6.1: Report failure to Jira (non-blocking, only if story was fetched)
+      if (storyPayload) {
+        const failureReporter = new FailureReporter(this.auditLogger);
+        await failureReporter.reportFailure({
+          executionId: execution.executionId,
+          storyId: storyPayload.storyId,
+          issueKey: storyPayload.jiraIssueKey,
+          failedAtState,
+          failureReason: message,
+        });
+      }
 
       throw error;
     }

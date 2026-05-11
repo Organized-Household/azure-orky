@@ -19,6 +19,75 @@ export class JiraClient {
     this.apiToken = apiToken;
   }
 
+  async transitionIssue(issueKey: string, transitionId: string): Promise<void> {
+    const url = `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.email}:${this.apiToken}`).toString('base64')}`,
+      },
+      body: JSON.stringify({ transition: { id: transitionId } }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(
+        `Jira transition failed for ${issueKey} (transitionId=${transitionId}): ${response.status} ${errorBody}`,
+      );
+    }
+  }
+
+  async addComment(issueKey: string, bodyText: string): Promise<void> {
+    const url = `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.email}:${this.apiToken}`).toString('base64')}`,
+      },
+      body: JSON.stringify({
+        body: {
+          type: 'doc',
+          version: 1,
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: bodyText }],
+            },
+          ],
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Jira add comment failed for ${issueKey}: ${response.status} ${errorBody}`);
+    }
+  }
+
+  async addRemoteLink(issueKey: string, linkUrl: string, title: string): Promise<void> {
+    const apiUrl = `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/remotelink`;
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.email}:${this.apiToken}`).toString('base64')}`,
+      },
+      body: JSON.stringify({ object: { url: linkUrl, title } }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(
+        `Jira add remote link failed for ${issueKey}: ${response.status} ${errorBody}`,
+      );
+    }
+  }
+
   async getIssue(issueId: string): Promise<unknown> {
     const url = `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueId)}`;
     console.log('[JiraClient] Fetching issue:', url);
