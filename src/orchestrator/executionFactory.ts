@@ -6,6 +6,7 @@ import { ForgeClient } from "../integrations/forge/forgeClient";
 import { InstructionValidator } from "../integrations/forge/instructionValidator";
 import { StoryRetrievalService } from "../integrations/jira/storyRetrievalService";
 import { ForgeOrchestrator } from "./forgeOrchestrator";
+import { RepositoryMutationExecutor } from "../agents/repositoryMutationExecutor";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
 
 export interface IntakeSuccess {
@@ -193,7 +194,11 @@ export class ExecutionFactory {
         this.auditLogger,
       );
 
-      await forgeOrchestrator.run(execution.executionId, storyPayload);
+      const packet = await forgeOrchestrator.run(execution.executionId, storyPayload);
+
+      // EPIC-3: Execute repository mutations
+      const mutationExecutor = new RepositoryMutationExecutor();
+      await mutationExecutor.execute(execution.executionId, storyPayload.storyId, packet);
 
       return {
         received: true,
