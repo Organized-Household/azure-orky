@@ -142,7 +142,13 @@ Return JSON matching this exact schema:
       "content": "<file content for create/modify/replace>"
     }
   ],
-  "validationCommands": ["<shell command to validate the changes>"]
-}`;
+  "validationCommands": []
+}
+
+IMPORTANT — validationCommands rules:
+- Always output an empty array: []
+- Do NOT generate python, pytest, ruby, java, or any language-specific test commands
+- The execution environment is a minimal Node.js Alpine container with only git and npm available
+- Validation via CI is handled in a later pipeline stage — do not attempt it here`;
   }
 }
