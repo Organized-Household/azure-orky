@@ -49,4 +49,15 @@ export class RepoChangeSetRepository {
       [branchName, commitSha, prUrl, headSha, executionId],
     );
   }
+
+  async updateMergeSha(executionId: string, mergeSha: string): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE repo_change_sets
+       SET merge_sha  = $1,
+           updated_at = NOW()
+       WHERE execution_id = $2`,
+      [mergeSha, executionId],
+    );
+  }
 }
