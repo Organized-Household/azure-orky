@@ -113,6 +113,7 @@ export class ForgeClient {
   }
 
   private buildPrompt(storyPayload: StoryPayload): string {
+    const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
     return `You are Forge, a developer instruction generation system.
 
 Given the following Jira story, produce a Developer Instruction Packet as a single valid JSON object.
@@ -131,7 +132,7 @@ Return JSON matching this exact schema:
 {
   "packetId": "<uuid>",
   "storyId": "<matches input storyId>",
-  "targetRepository": "<inferred from projectKey>",
+  "targetRepository": "${repoOwner}/<lowercase repo name inferred from projectKey>",
   "baseBranch": "main",
   "branchNameHint": "<kebab-case hint based on summary>",
   "fileOperations": [
