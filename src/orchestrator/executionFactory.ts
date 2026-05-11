@@ -1,15 +1,28 @@
 import { AuditLogger } from "../audit/auditLogger";
 import { ExecutionRepository } from "../db/repositories/executionRepository";
+import { InstructionPacketRepository } from "../db/repositories/instructionPacketRepository";
 import { EXECUTION_STATES, StoryPayload } from "../domain/storyPayload";
+import { ForgeClient } from "../integrations/forge/forgeClient";
+import { InstructionValidator } from "../integrations/forge/instructionValidator";
 import { StoryRetrievalService } from "../integrations/jira/storyRetrievalService";
+import { ForgeOrchestrator } from "./forgeOrchestrator";
+import { RepositoryMutationExecutor } from "../agents/repositoryMutationExecutor";
+import { PrOrchestrator } from "../integrations/github/prOrchestrator";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
 
 export interface IntakeSuccess {
   received: true;
   executionId: string;
   storyId: string;
-  status: "STORY_FETCHED";
+  status: "PR_CREATED";
   storyPayload: StoryPayload;
+}
+
+export interface IntakeIgnored {
+  received: true;
+  ignored: true;
+  reason: string;
+  storyId: string;
 }
 
 export class ExecutionFactory {
@@ -62,8 +75,25 @@ export class ExecutionFactory {
 
   async createValidatedExecution(
     validation: JiraWebhookValidationResult,
-  ): Promise<IntakeSuccess> {
+  ): Promise<IntakeSuccess | IntakeIgnored> {
     const storyId = validation.storyId!;
+
+    // Idempotency gate: if a non-failed execution already exists for this
+    // story, silently ignore the trigger. This handles:
+    // 1. Jira at-least-once webhook delivery (same event delivered twice)
+    // 2. Non-status field edits on a story that completed a prior execution
+    const alreadyProcessed = await this.executionRepository.hasActiveOrCompletedExecution(storyId);
+    if (alreadyProcessed) {
+      console.info(
+        `[ExecutionFactory] Idempotency gate: execution already exists for story ${storyId} — ignoring trigger`,
+      );
+      return {
+        received: true,
+        ignored: true,
+        reason: 'execution_already_exists',
+        storyId,
+      };
+    }
 
     // Create execution record first so we have an executionId for the lock
     const execution = await this.executionRepository.create({
@@ -181,11 +211,35 @@ export class ExecutionFactory {
         },
       });
 
+      const forgeOrchestrator = new ForgeOrchestrator(
+        new ForgeClient(),
+        new InstructionValidator(),
+        this.executionRepository,
+        new InstructionPacketRepository(),
+        this.auditLogger,
+      );
+
+      const packet = await forgeOrchestrator.run(execution.executionId, storyPayload);
+
+      // EPIC-3: Execute repository mutations
+      const mutationExecutor = new RepositoryMutationExecutor();
+      await mutationExecutor.execute(execution.executionId, storyPayload.storyId, packet);
+
+      // EPIC-4: Create branch, commit changes, open PR
+      const prOrchestrator = new PrOrchestrator();
+      await prOrchestrator.run({
+        executionId: execution.executionId,
+        storyId: storyPayload.storyId,
+        storyTitle: storyPayload.title,
+        branchNameHint: packet.branchNameHint,
+        targetRepository: packet.targetRepository,
+      });
+
       return {
         received: true,
         executionId: execution.executionId,
         storyId: storyPayload.storyId,
-        status: EXECUTION_STATES.STORY_FETCHED,
+        status: 'PR_CREATED',
         storyPayload,
       };
     } catch (error) {

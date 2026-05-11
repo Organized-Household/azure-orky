@@ -113,6 +113,7 @@ export class ForgeClient {
   }
 
   private buildPrompt(storyPayload: StoryPayload): string {
+    const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
     return `You are Forge, a developer instruction generation system.
 
 Given the following Jira story, produce a Developer Instruction Packet as a single valid JSON object.
@@ -131,17 +132,23 @@ Return JSON matching this exact schema:
 {
   "packetId": "<uuid>",
   "storyId": "<matches input storyId>",
-  "targetRepository": "<inferred from projectKey>",
+  "targetRepository": "${repoOwner}/<lowercase repo name inferred from projectKey>",
   "baseBranch": "main",
   "branchNameHint": "<kebab-case hint based on summary>",
   "fileOperations": [
     {
       "operation": "create" | "modify" | "replace" | "delete",
-      "filePath": "<relative file path>",
+      "path": "<relative file path>",
       "content": "<file content for create/modify/replace>"
     }
   ],
-  "validationCommands": ["<shell command to validate the changes>"]
-}`;
+  "validationCommands": []
+}
+
+IMPORTANT — validationCommands rules:
+- Always output an empty array: []
+- Do NOT generate python, pytest, ruby, java, or any language-specific test commands
+- The execution environment is a minimal Node.js Alpine container with only git and npm available
+- Validation via CI is handled in a later pipeline stage — do not attempt it here`;
   }
 }
