@@ -81,4 +81,31 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`Running on port ${port}`);
+
+  // Startup environment variable check — logs presence only, never values
+  const requiredEnvVars = [
+    'ANTHROPIC_API_KEY',
+    'DATABASE_URL',
+    'GH_TOKEN',
+    'GITHUB_REPOSITORY_OWNER',
+    'JIRA_BASE_URL',
+    'JIRA_EMAIL',
+    'JIRA_API_TOKEN',
+  ];
+  console.log('[ENV CHECK] Required environment variables:');
+  let missingCount = 0;
+  for (const name of requiredEnvVars) {
+    const present = Boolean(process.env[name]);
+    if (present) {
+      console.log(`[ENV CHECK]   ${name}: SET`);
+    } else {
+      console.warn(`[ENV CHECK]   ${name}: NOT SET ⚠️`);
+      missingCount++;
+    }
+  }
+  if (missingCount > 0) {
+    console.warn(`[ENV CHECK] ${missingCount} required variable(s) missing — service will fail when these code paths are reached`);
+  } else {
+    console.log('[ENV CHECK] All required variables present');
+  }
 });
