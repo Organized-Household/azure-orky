@@ -291,6 +291,12 @@ You implement specifications exactly as written. You write safe, production-qual
 - No new npm packages without Architect approval
 - No standalone services — integrate into existing src/ module structure
 - Never log GH_TOKEN, ANTHROPIC_API_KEY, or any credential
+- Logging: console.log() and console.error() only — never import a logger library (no winston, pino, bunyan, utils/logger, or any logger module)
+- Forge is invoked via @anthropic-ai/sdk (already installed) — never via fetch(), axios, or any HTTP client
+- Never create or modify src/config/env.ts — read env vars directly with process.env
+- Never add required env var checks that would block startup — new env vars must have safe defaults or be optional
+- No new model files in src/db/models/ unless the story explicitly requires a TypeScript interface for a new table
+- All new DB repositories follow the pattern in src/db/repositories/executionRepository.ts: getPool(), $1/$2 params, catch (err: unknown)
 
 ## Execution State Machine
 RECEIVED → VALIDATED → STORY_FETCHED → ARTIFACTS_RESOLVED →
