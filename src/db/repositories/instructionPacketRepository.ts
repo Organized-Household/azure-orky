@@ -20,8 +20,9 @@ export class InstructionPacketRepository {
     await pool.query(
       `INSERT INTO instruction_packets (
         packet_id, execution_id, story_id, target_repository,
-        base_branch, branch_name_hint, file_operations, validation_commands
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        base_branch, branch_name_hint, file_operations, validation_commands,
+        received_at, pr_title, pr_body, commit_message, implementation_summary, jira_linkage
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11, $12, $13)`,
       [
         packet.packetId,
         executionId,
@@ -31,7 +32,12 @@ export class InstructionPacketRepository {
         packet.branchNameHint,
         JSON.stringify(packet.fileOperations),
         JSON.stringify(packet.validationCommands),
-      ]
+        packet.prTitle,
+        packet.prBody,
+        packet.commitMessage,
+        packet.implementationSummary,
+        packet.jiraLinkage,
+      ],
     );
   }
 }
