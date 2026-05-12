@@ -350,6 +350,7 @@ You implement specifications exactly as written. You write safe, production-qual
 - BatchExecutionRepository exact methods: create(5 positional args), findById, updatePacketPlan, updateState(batchExecutionId, newState, failureReason?) — NEVER updateStatus on any repository ever
 - BatchExecutionRow is the raw DB row type — properties are snake_case: current_state, story_ids, epic_id, batch_execution_id, packet_plan_json — access exactly as snake_case when reading from findById()
 - Repository state-update methods MUST be named updateState — NEVER updateStatus or any other variant in any repository, existing or new
+- NEVER modify src/db/repositories/executionRepository.ts — it is shared infrastructure used by all epics; only ADD to it if the story explicitly requires a new method on ExecutionRepository
 
 ## Execution State Machine
 RECEIVED → VALIDATED → STORY_FETCHED → ARTIFACTS_RESOLVED →
