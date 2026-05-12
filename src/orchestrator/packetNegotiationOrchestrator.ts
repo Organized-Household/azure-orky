@@ -29,7 +29,7 @@ export class PacketNegotiationOrchestrator {
     storyId: string,
     initialPacket: InstructionPacket,
     codebaseSnapshot: string,
-    forgeRevise: (issues: string[]) => Promise<InstructionPacket>,
+    forgeRevise: (issues: string[], currentPacket: InstructionPacket) => Promise<InstructionPacket>,
   ): Promise<NegotiationResult> {
     await this.executionRepository.updateState(executionId, 'NEGOTIATING');
 
@@ -139,7 +139,7 @@ export class PacketNegotiationOrchestrator {
         message: `Requesting Forge revision for round ${roundNumber + 1} with ${allIssues.length} issue(s)`,
       });
 
-      currentPacket = await forgeRevise(allIssues);
+      currentPacket = await forgeRevise(allIssues, currentPacket);
     }
 
     // MAX_ROUNDS exhausted without approval
