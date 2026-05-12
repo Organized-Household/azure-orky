@@ -346,6 +346,10 @@ You implement specifications exactly as written. You write safe, production-qual
 - PacketPlan shape: { packetPlan: PacketPlanDIP[] } — access as plan.packetPlan, never plan.groups or plan.dips
 - BatchExecutionRepository.create() takes 5 positional args: (batchExecutionId, epicId, projectKey, storyIds, startedAt) — never a single object argument
 - ExecutionRepository has no findByStoryId() method — never invent methods not visible in the codebase snapshot
+- ExecutionRepository exact methods (do NOT rename or remove any): create, updateState(executionId, state, failureReason?), getById, failIfNotTerminal, acquireLock, releaseLock, hasActiveOrCompletedExecution — never modify executionRepository.ts method signatures
+- BatchExecutionRepository exact methods: create(5 positional args), findById, updatePacketPlan, updateState(batchExecutionId, newState, failureReason?) — NEVER updateStatus on any repository ever
+- BatchExecutionRow is the raw DB row type — properties are snake_case: current_state, story_ids, epic_id, batch_execution_id, packet_plan_json — access exactly as snake_case when reading from findById()
+- Repository state-update methods MUST be named updateState — NEVER updateStatus or any other variant in any repository, existing or new
 
 ## Execution State Machine
 RECEIVED → VALIDATED → STORY_FETCHED → ARTIFACTS_RESOLVED →

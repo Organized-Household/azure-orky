@@ -157,7 +157,6 @@ export class ExecutionRepository {
     const result = await pool.query(
       `SELECT 1 FROM executions
        WHERE story_id = $1
-         AND status NOT IN ('FAILED')
        LIMIT 1`,
       [storyId]
     );
