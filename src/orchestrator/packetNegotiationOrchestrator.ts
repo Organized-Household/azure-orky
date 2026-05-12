@@ -3,6 +3,7 @@ import { AuditLogger } from '../audit/auditLogger';
 import { PacketReviewer } from '../integrations/review/packetReviewer';
 import { PacketNegotiationRepository } from '../db/repositories/packetNegotiationRepository';
 import { ExecutionRepository } from '../db/repositories/executionRepository';
+import { CompilationChecker } from '../integrations/typescript/compilationChecker';
 
 const MAX_ROUNDS = 3;
 
@@ -14,6 +15,8 @@ export interface NegotiationResult {
 }
 
 export class PacketNegotiationOrchestrator {
+  private readonly compilationChecker = new CompilationChecker();
+
   constructor(
     private reviewer: PacketReviewer,
     private negotiationRepository: PacketNegotiationRepository,
@@ -54,6 +57,24 @@ export class PacketNegotiationOrchestrator {
         message: `Starting review round ${roundNumber}/${MAX_ROUNDS}`,
       });
 
+      // --- TypeScript compilation check ---
+      const compilationErrors = await this.compilationChecker.check(
+        currentPacket.fileOperations,
+      );
+
+      if (compilationErrors.length > 0) {
+        await this.auditLogger.log({
+          executionId,
+          storyId,
+          step: 'negotiation_compilation_failed',
+          state: 'NEGOTIATING',
+          status: 'warn',
+          message: `Round ${roundNumber}: ${compilationErrors.length} new TypeScript error(s)`,
+          metadata: { compilationErrors },
+        });
+      }
+
+      // --- Semantic review ---
       const reviewResult = await this.reviewer.review(
         executionId,
         storyId,
@@ -61,41 +82,48 @@ export class PacketNegotiationOrchestrator {
         codebaseSnapshot,
       );
 
+      // --- Combine all issues ---
+      const allIssues = [
+        ...compilationErrors.map((e) => `[TypeScript compilation error] ${e}`),
+        ...reviewResult.issues,
+      ];
+
+      const approved = compilationErrors.length === 0 && reviewResult.verdict === 'APPROVED';
+
       await this.negotiationRepository.saveRound(
         executionId,
         storyId,
         roundNumber,
-        reviewResult.verdict,
-        reviewResult.issues,
+        approved ? 'APPROVED' : 'QUESTIONS',
+        allIssues,
         roundNumber === 1 ? null : currentPacket.packetId,
       );
 
-      if (reviewResult.verdict === 'APPROVED') {
+      if (approved) {
         await this.auditLogger.log({
           executionId,
           storyId,
           step: 'negotiation_approved',
           state: 'NEGOTIATING',
           status: 'success',
-          message: `Packet approved after ${roundNumber} round(s)`,
+          message: `Packet approved after ${roundNumber} round(s) (compiles clean, reviewer approved)`,
         });
 
         return {
           approved: true,
           finalPacket: currentPacket,
           roundsCompleted: roundNumber,
-          diagnosticMessage: `Packet approved by reviewer after ${roundNumber} round(s).`,
+          diagnosticMessage: `Packet approved after ${roundNumber} round(s).`,
         };
       }
 
-      // verdict === 'QUESTIONS'
       await this.auditLogger.log({
         executionId,
         storyId,
-        step: 'negotiation_questions_raised',
+        step: 'negotiation_issues_found',
         state: 'NEGOTIATING',
         status: 'warn',
-        message: `Round ${roundNumber} raised ${reviewResult.issues.length} issue(s): ${reviewResult.issues.join('; ')}`,
+        message: `Round ${roundNumber}: ${allIssues.length} issue(s) — ${compilationErrors.length} compile error(s), ${reviewResult.issues.length} reviewer issue(s)`,
       });
 
       if (roundNumber === MAX_ROUNDS) {
@@ -108,20 +136,21 @@ export class PacketNegotiationOrchestrator {
         step: 'negotiation_requesting_revision',
         state: 'NEGOTIATING',
         status: 'info',
-        message: `Requesting Forge revision for round ${roundNumber + 1}`,
+        message: `Requesting Forge revision for round ${roundNumber + 1} with ${allIssues.length} issue(s)`,
       });
 
-      currentPacket = await forgeRevise(reviewResult.issues);
+      currentPacket = await forgeRevise(allIssues);
     }
 
-    // 3 rounds exhausted without APPROVED
+    // MAX_ROUNDS exhausted without approval
     const allRounds = await this.negotiationRepository.getRoundsByExecutionId(executionId);
-    const finalRoundIssues = allRounds
-      .filter((r) => r.roundNumber === MAX_ROUNDS)
-      .flatMap((r) => r.issues)
-      .join('; ') || 'none recorded';
+    const finalRoundIssues =
+      allRounds
+        .filter((r) => r.roundNumber === MAX_ROUNDS)
+        .flatMap((r) => r.issues)
+        .join('; ') || 'none recorded';
 
-    const diagnostic = `Packet negotiation failed after ${MAX_ROUNDS} rounds. Final reviewer issues: ${finalRoundIssues}`;
+    const diagnostic = `Packet negotiation failed after ${MAX_ROUNDS} rounds. Final issues: ${finalRoundIssues}`;
 
     await this.auditLogger.log({
       executionId,
