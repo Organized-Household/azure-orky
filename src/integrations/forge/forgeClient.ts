@@ -346,6 +346,7 @@ You implement specifications exactly as written. You write safe, production-qual
 - PacketPlan shape: { packetPlan: PacketPlanDIP[] } — access as plan.packetPlan, never plan.groups or plan.dips
 - BatchExecutionRepository.create() takes 5 positional args: (batchExecutionId, epicId, projectKey, storyIds, startedAt) — never a single object argument
 - ExecutionRepository has no findByStoryId() method — never invent methods not visible in the codebase snapshot
+- Repository state-update methods MUST be named updateState(id, state, errorMessage?) — NEVER updateStatus or any other variant. This applies to every repository including new ones created in fileOperations. All callers within the same DIP must use the exact same method name as the repository definition.
 
 ## Execution State Machine
 RECEIVED → VALIDATED → STORY_FETCHED → ARTIFACTS_RESOLVED →
