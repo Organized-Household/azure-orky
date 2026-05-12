@@ -54,6 +54,22 @@ export const epicFileMap: Record<string, string[]> = {
     'src/db/repositories/projectContextRepository.ts',
     'src/db/repositories/decisionLogRepository.ts',
   ],
+  'EPIC-10': [
+    'src/integrations/forge/forgeClient.ts',
+    'src/orchestrator/forgeOrchestrator.ts',
+    'src/orchestrator/packetNegotiationOrchestrator.ts',
+    'src/integrations/review/packetReviewer.ts',
+    'src/db/repositories/packetNegotiationRepository.ts',
+    'src/db/repositories/instructionPacketRepository.ts',
+  ],
+  'EPIC-11': [
+    'src/orchestrator/executionFactory.ts',
+    'src/orchestrator/forgeOrchestrator.ts',
+    'src/integrations/forge/forgeClient.ts',
+    'src/webhooks/jiraWebhookController.ts',
+    'src/db/repositories/executionRepository.ts',
+    'src/domain/storyPayload.ts',
+  ],
 };
 
 /** Maximum total character budget for injected codebase snapshot */
