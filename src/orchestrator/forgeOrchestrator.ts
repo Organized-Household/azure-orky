@@ -112,9 +112,7 @@ export class ForgeOrchestrator {
     );
 
     const forgeRevise = async (issues: string[]): Promise<InstructionPacket> => {
-      const revised = await this.forgeClient.revise(storyPayload, issues);
-      await this.packetRepo.save(executionId, revised);
-      return revised;
+      return this.forgeClient.revise(storyPayload, issues);
     };
 
     const negotiationResult = await negotiationOrchestrator.negotiate(
