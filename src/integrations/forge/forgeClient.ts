@@ -3,6 +3,8 @@ import Anthropic, {
   APIError,
   InternalServerError,
 } from '@anthropic-ai/sdk';
+import * as fs from 'fs';
+import * as path from 'path';
 import { StoryPayload } from '../../domain/storyPayload';
 import { InstructionPacket } from '../../domain/instructionPacket';
 import { ProjectContextRepository } from '../../db/repositories/projectContextRepository';
@@ -189,6 +191,7 @@ Return ONLY the corrected JSON object. No markdown fences. No explanation. No te
     projectContext: string;
     implementationHistory: string;
     codebaseSnapshot: string;
+    migrationInventory: string;
   }> {
     const epicId = storyPayload.PDEEpicID ?? storyPayload.epicId ?? '';
 
@@ -260,12 +263,31 @@ Return ONLY the corrected JSON object. No markdown fences. No explanation. No te
       codebaseSnapshot = `_(Codebase snapshot fetch failed: ${msg} — proceeding without snapshot)_`;
     }
 
-    return { projectContext, implementationHistory, codebaseSnapshot };
+    // 4. Migration inventory — non-fatal
+    let migrationInventory = '';
+    try {
+      const migrationsDir = path.join(process.cwd(), 'migrations');
+      const files = fs
+        .readdirSync(migrationsDir)
+        .filter((f) => f.endsWith('.sql'))
+        .sort();
+      migrationInventory = files.join('\n');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      migrationInventory = `_(Migration inventory unavailable: ${msg})_`;
+    }
+
+    return { projectContext, implementationHistory, codebaseSnapshot, migrationInventory };
   }
 
   private buildPrompt(
     storyPayload: StoryPayload,
-    context: { projectContext: string; implementationHistory: string; codebaseSnapshot: string },
+    context: {
+      projectContext: string;
+      implementationHistory: string;
+      codebaseSnapshot: string;
+      migrationInventory: string;
+    },
   ): string {
     const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
     const epicId = storyPayload.PDEEpicID ?? storyPayload.epicId ?? '';
@@ -301,6 +323,10 @@ You implement specifications exactly as written. You write safe, production-qual
 - Never import from a module that does not appear in the codebase snapshot or in fileOperations of this DIP — if a dependency does not exist, create it in fileOperations or use an existing module
 - StoryPayload fields: storyId (string), title (string), description (string), acceptanceCriteria (string — NOT string[]), jiraIssueKey (string), PDEStoryID (string), PDEEpicID (string | undefined)
 - If a fileOperation creates a DB repository that queries a table, fileOperations MUST also include the migration SQL file for that table
+- Migration files MUST be placed at migrations/<NNN>_description.sql at the repo root — NEVER inside src/ or any subdirectory
+- Migration numbering: use the next sequential number after the highest existing migration (see "Existing Migrations" section below)
+- If a table already exists in the migration inventory, do NOT create it again — add an ALTER TABLE migration instead
+- AuditLogger.log() signature: { executionId: string, storyId: string, step: string, state: string, status: string, message?: string, metadata?: unknown } — executionId and storyId are never null, use '' if not applicable; metadata takes an object (not a JSON string); there is no timestamp field
 - Project context artifacts are fetched via ProjectContextRepository.getAll() in src/db/repositories/projectContextRepository.ts — never invent an ArtifactResolver or similar abstraction
 
 ## Execution State Machine
@@ -321,6 +347,12 @@ ${context.projectContext}
 ## Implementation History (Last 5 decisions for ${epicId || 'this epic'})
 
 ${context.implementationHistory}
+
+---
+
+## Existing Migrations (migrations/ at repo root)
+
+${context.migrationInventory}
 
 ---
 

@@ -65,10 +65,15 @@ export const epicFileMap: Record<string, string[]> = {
   'EPIC-11': [
     'src/orchestrator/executionFactory.ts',
     'src/orchestrator/forgeOrchestrator.ts',
+    'src/orchestrator/batchOrchestrator.ts',
+    'src/orchestrator/batchCollector.ts',
     'src/integrations/forge/forgeClient.ts',
+    'src/integrations/forge/forgePlannerClient.ts',
     'src/webhooks/jiraWebhookController.ts',
     'src/db/repositories/executionRepository.ts',
+    'src/db/repositories/batchExecutionRepository.ts',
     'src/domain/storyPayload.ts',
+    'src/audit/auditLogger.ts',
   ],
 };
 
