@@ -9,7 +9,7 @@
     "dev": "ts-node src/server.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.0",
+    "@anthropic-ai/sdk": "^0.95.2",
     "@octokit/rest": "^22.0.1",
     "@types/axios": "^0.9.36",
     "@types/express": "^5.0.6",
