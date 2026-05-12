@@ -70,6 +70,8 @@ export const epicFileMap: Record<string, string[]> = {
     'src/integrations/forge/batchedForgeClient.ts',
     'src/db/repositories/executionRepository.ts',
     'src/db/repositories/batchExecutionRepository.ts',
+    'src/agents/repositoryMutationExecutor.ts',
+    'src/integrations/github/prOrchestrator.ts',
     'src/domain/storyPayload.ts',
     'src/audit/auditLogger.ts',
   ],
