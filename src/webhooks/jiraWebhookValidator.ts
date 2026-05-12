@@ -67,17 +67,25 @@ export function validateJiraWebhookPayload(
   const issue = asRecord(root.issue);
   const fields = asRecord(issue.fields);
 
-  const labels: string[] = Array.isArray(fields.labels)
-    ? fields.labels.map((l: unknown) => (typeof l === 'string' ? l : String(l)))
+  const rawLabels = fields.labels;
+  console.log('[WebhookValidator] fields.labels raw value:', JSON.stringify(rawLabels));
+
+  const labels: string[] = Array.isArray(rawLabels)
+    ? rawLabels.map((l: unknown) => (typeof l === 'string' ? l : String(l)))
     : [];
 
+  console.log('[WebhookValidator] parsed labels:', labels);
+
   if (labels.includes('orky-failed')) {
+    console.log('[WebhookValidator] orky-failed label found — ignoring webhook');
     return {
       valid: false,
       ignored: true,
       reason: 'orky-failed label present — manual retry required',
     };
   }
+
+  console.log('[WebhookValidator] orky-failed label NOT found — proceeding');
 
   const storyId = toPlainText(issue.key);
   const issueId = toPlainText(issue.id);
