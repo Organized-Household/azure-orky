@@ -1,6 +1,6 @@
 import { getEnv } from '../../config/env';
 import { ForgePlannerClient, ForgePlanningRequest, PacketPlan } from './forgePlannerClient';
-import { logger } from '../../utils/logger';
+
 
 export class ForgePlannerAdapter {
   private readonly client: ForgePlannerClient;
@@ -17,7 +17,7 @@ export class ForgePlannerAdapter {
   }
 
   async generatePacketPlan(request: ForgePlanningRequest): Promise<PacketPlan> {
-    logger.info('ForgePlannerAdapter: Generating Packet Plan', {
+    console.log('ForgePlannerAdapter: Generating Packet Plan', {
       epicId: request.epicId,
       storyCount: request.stories.length
     });
@@ -25,14 +25,14 @@ export class ForgePlannerAdapter {
     try {
       const plan = await this.client.requestPacketPlan(request);
 
-      logger.info('ForgePlannerAdapter: Packet Plan generated successfully', {
+      console.log('ForgePlannerAdapter: Packet Plan generated successfully', {
         dipCount: plan.packetPlan.length
       });
 
       return plan;
     } catch (err: unknown) {
       if (err instanceof Error) {
-        logger.error('ForgePlannerAdapter: Packet Plan generation failed', {
+        console.error('ForgePlannerAdapter: Packet Plan generation failed', {
           error: err.message,
           epicId: request.epicId
         });

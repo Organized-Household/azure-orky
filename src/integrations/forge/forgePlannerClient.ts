@@ -1,5 +1,5 @@
 import { ForgeConfig } from '../../config/env';
-import { logger } from '../../utils/logger';
+
 
 export interface PacketPlanEntry {
   dipId: string;
@@ -36,7 +36,7 @@ export class ForgePlannerClient {
   }
 
   async requestPacketPlan(request: ForgePlanningRequest): Promise<PacketPlan> {
-    logger.info('Requesting Packet Plan from Forge', {
+    console.log('Requesting Packet Plan from Forge', {
       epicId: request.epicId,
       storyCount: request.stories.length,
       storyIds: request.stories.map(s => s.storyId)
@@ -49,7 +49,7 @@ export class ForgePlannerClient {
       const parsed = this.parseForgeResponse(response);
       this.validatePacketPlan(parsed, request.stories.map(s => s.storyId));
 
-      logger.info('Packet Plan received and validated', {
+      console.log('Packet Plan received and validated', {
         dipCount: parsed.packetPlan.length,
         packetPlan: parsed.packetPlan
       });
@@ -57,7 +57,7 @@ export class ForgePlannerClient {
       return parsed;
     } catch (err: unknown) {
       if (err instanceof Error) {
-        logger.error('Forge Packet Plan request failed', {
+        console.error('Forge Packet Plan request failed', {
           error: err.message,
           epicId: request.epicId
         });
@@ -228,7 +228,7 @@ Do not include markdown fences, explanations, or any text outside the JSON objec
       throw new Error(`Packet Plan contains unexpected stories: ${extraStories.join(', ')}`);
     }
 
-    logger.info('Packet Plan validation passed', {
+    console.log('Packet Plan validation passed', {
       dipCount: plan.packetPlan.length,
       totalStories: allStoryIdsInPlan.length
     });

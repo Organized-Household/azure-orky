@@ -1,6 +1,6 @@
 import { getPool } from '../dbClient';
 import { BatchExecution, NewBatchExecution } from '../models/BatchExecution';
-import { logger } from '../../utils/logger';
+
 import { randomUUID } from 'crypto';
 
 export class BatchExecutionRepository {
@@ -33,7 +33,7 @@ export class BatchExecutionRepository {
       const result = await pool.query(query, values);
       const row = result.rows[0];
 
-      logger.info('BatchExecution created', {
+      console.log('BatchExecution created', {
         batchExecutionId,
         epicId: data.epic_id,
         storyCount: data.story_ids.length
@@ -42,7 +42,7 @@ export class BatchExecutionRepository {
       return this.mapRowToBatchExecution(row);
     } catch (err: unknown) {
       if (err instanceof Error) {
-        logger.error('Failed to create BatchExecution', {
+        console.error('Failed to create BatchExecution', {
           error: err.message,
           epicId: data.epic_id
         });
@@ -69,12 +69,12 @@ export class BatchExecutionRepository {
     try {
       await pool.query(query, values);
 
-      logger.info('BatchExecution packet_plan_json updated', {
+      console.log('BatchExecution packet_plan_json updated', {
         batchExecutionId
       });
     } catch (err: unknown) {
       if (err instanceof Error) {
-        logger.error('Failed to update packet_plan_json', {
+        console.error('Failed to update packet_plan_json', {
           error: err.message,
           batchExecutionId
         });
@@ -105,14 +105,14 @@ export class BatchExecutionRepository {
     try {
       await pool.query(query, values);
 
-      logger.info('BatchExecution status updated', {
+      console.log('BatchExecution status updated', {
         batchExecutionId,
         status,
         failureReason
       });
     } catch (err: unknown) {
       if (err instanceof Error) {
-        logger.error('Failed to update BatchExecution status', {
+        console.error('Failed to update BatchExecution status', {
           error: err.message,
           batchExecutionId
         });
@@ -140,7 +140,7 @@ export class BatchExecutionRepository {
       return this.mapRowToBatchExecution(result.rows[0]);
     } catch (err: unknown) {
       if (err instanceof Error) {
-        logger.error('Failed to find BatchExecution by ID', {
+        console.error('Failed to find BatchExecution by ID', {
           error: err.message,
           batchExecutionId
         });

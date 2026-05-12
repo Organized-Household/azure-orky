@@ -59,9 +59,9 @@ export function getEnv(): EnvConfig {
     GH_TOKEN: get('GH_TOKEN'),
     GH_OWNER: get('GH_OWNER'),
     GH_REPO: get('GH_REPO'),
-    FORGE_API_URL: get('FORGE_API_URL'),
-    FORGE_API_KEY: get('FORGE_API_KEY'),
-    FORGE_MODEL: process.env.FORGE_MODEL || 'claude-3-7-sonnet-20250219',
+    FORGE_API_URL: process.env.FORGE_API_URL || '',
+    FORGE_API_KEY: process.env.FORGE_API_KEY || '',
+    FORGE_MODEL: process.env.FORGE_MODEL || 'claude-sonnet-4-5',
     FORGE_MAX_TOKENS: getInt('FORGE_MAX_TOKENS', 200000),
     FORGE_TIMEOUT_MS: getInt('FORGE_TIMEOUT_MS', 120000)
   };
