@@ -109,6 +109,72 @@ export class ForgeClient {
     );
   }
 
+  async revise(storyPayload: StoryPayload, issues: string[]): Promise<InstructionPacket> {
+    const context = await this.assembleContext(storyPayload);
+    const basePrompt = this.buildPrompt(storyPayload, context);
+    const issueList = issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n');
+    const prompt = `${basePrompt}
+
+---
+
+## Revision Required
+
+A reviewer has identified the following compatibility issues with the previous packet. You must address ALL of them in your revised output:
+
+${issueList}
+
+Return a corrected JSON packet that resolves every issue listed above.`;
+
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      if (attempt > 0) {
+        await sleep(this.backoffMs[attempt - 1]);
+      }
+
+      try {
+        const response = await this.client.messages.create(
+          {
+            model: 'claude-sonnet-4-5',
+            max_tokens: 8192,
+            messages: [{ role: 'user', content: prompt }],
+          },
+          { timeout: this.timeoutMs },
+        );
+
+        const block = response.content[0];
+        const text = block.type === 'text' ? block.text : '';
+        const cleaned = stripMarkdownFences(text);
+
+        try {
+          return JSON.parse(cleaned) as InstructionPacket;
+        } catch {
+          throw new ForgeInvocationError(
+            'FORGE_PARSE_ERROR',
+            `Forge revision response is not valid JSON: ${cleaned.slice(0, 300)}`,
+          );
+        }
+      } catch (error) {
+        if (error instanceof ForgeInvocationError) throw error;
+        if (isRetryable(error)) { lastError = error; continue; }
+        throw new ForgeInvocationError(
+          'FORGE_HTTP_ERROR',
+          `Forge revision request failed: ${error instanceof Error ? error.message : String(error)}`,
+          error,
+        );
+      }
+    }
+
+    const isTimeout = lastError instanceof APIConnectionTimeoutError;
+    throw new ForgeInvocationError(
+      isTimeout ? 'FORGE_TIMEOUT' : 'FORGE_HTTP_ERROR',
+      isTimeout
+        ? 'Forge revision request timed out after all retries'
+        : `Forge revision request failed after all retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      lastError,
+    );
+  }
+
   private async assembleContext(storyPayload: StoryPayload): Promise<{
     projectContext: string;
     implementationHistory: string;

@@ -4,8 +4,12 @@ import { ForgeClient, ForgeInvocationError } from '../integrations/forge/forgeCl
 import { InstructionValidator } from '../integrations/forge/instructionValidator';
 import { ExecutionRepository } from '../db/repositories/executionRepository';
 import { InstructionPacketRepository } from '../db/repositories/instructionPacketRepository';
+import { PacketNegotiationRepository } from '../db/repositories/packetNegotiationRepository';
 import { AuditLogger } from '../audit/auditLogger';
 import { ExecutionError } from '../domain/executionError';
+import { PacketReviewer } from '../integrations/review/packetReviewer';
+import { PacketNegotiationOrchestrator } from './packetNegotiationOrchestrator';
+import { CodebaseSnapshotFetcher } from '../integrations/github/codebaseSnapshotFetcher';
 
 export class ForgeOrchestrator {
   constructor(
@@ -73,6 +77,66 @@ export class ForgeOrchestrator {
       status: 'succeeded',
       message: `Instruction packet received: ${packet.packetId}`,
     });
+
+    // --- EPIC-10: Packet Negotiation Loop ---
+    const epicId = storyPayload.PDEEpicID ?? storyPayload.epicId ?? '';
+
+    let codebaseSnapshot = '';
+    try {
+      const snapshotFetcher = new CodebaseSnapshotFetcher();
+      const snapshot = await snapshotFetcher.fetchForEpic(epicId);
+      if (snapshot.files.length > 0) {
+        codebaseSnapshot = snapshot.files
+          .map((f) => `#### \`${f.path}\`\n\`\`\`typescript\n${f.content}\n\`\`\``)
+          .join('\n\n');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'negotiation_snapshot_failed',
+        state: EXECUTION_STATES.PACKET_RECEIVED,
+        status: 'warn',
+        message: `Codebase snapshot unavailable for reviewer — proceeding without it: ${message}`,
+      });
+    }
+
+    const reviewer = new PacketReviewer(this.auditLogger);
+    const negotiationRepo = new PacketNegotiationRepository();
+    const negotiationOrchestrator = new PacketNegotiationOrchestrator(
+      reviewer,
+      negotiationRepo,
+      this.executionRepo,
+      this.auditLogger,
+    );
+
+    const forgeRevise = async (issues: string[]): Promise<InstructionPacket> => {
+      const revised = await this.forgeClient.revise(storyPayload, issues);
+      await this.packetRepo.save(executionId, revised);
+      return revised;
+    };
+
+    const negotiationResult = await negotiationOrchestrator.negotiate(
+      executionId,
+      storyId,
+      packet,
+      codebaseSnapshot,
+      forgeRevise,
+    );
+
+    if (!negotiationResult.approved) {
+      await this.executionRepo.failIfNotTerminal(executionId, negotiationResult.diagnosticMessage);
+      throw new ExecutionError(
+        negotiationResult.diagnosticMessage,
+        'PACKET_INVALID',
+        executionId,
+        storyId,
+      );
+    }
+
+    packet = negotiationResult.finalPacket;
+    // --- End EPIC-10 ---
 
     const result = this.validator.validate(packet);
 
