@@ -15,32 +15,22 @@ export class ForgePlannerClient {
   private client: Anthropic;
 
   constructor() {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required');
-    }
-    this.client = new Anthropic({ apiKey });
+    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   }
 
   async generatePacketPlan(
     stories: StoryPayload[],
-    artifacts: { baPack: string; pdd: string; systemArch: string }
+    projectContext: string,
   ): Promise<PacketPlan> {
-    const prompt = this.buildPlanningPrompt(stories, artifacts);
+    const prompt = this.buildPlanningPrompt(stories, projectContext);
 
     console.log(`[ForgePlannerClient] Invoking Forge for packet planning with ${stories.length} stories`);
 
     try {
       const response = await this.client.messages.create({
-        model: 'claude-3-7-sonnet-20250219',
-        max_tokens: 16000,
-        temperature: 0,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ]
+        model: 'claude-sonnet-4-5',
+        max_tokens: 8192,
+        messages: [{ role: 'user', content: prompt }],
       });
 
       const textContent = response.content.find((block) => block.type === 'text');
@@ -48,8 +38,7 @@ export class ForgePlannerClient {
         throw new Error('Forge response did not contain text content');
       }
 
-      const rawText = textContent.text.trim();
-      const packetPlan = this.parsePacketPlan(rawText);
+      const packetPlan = this.parsePacketPlan(textContent.text);
       this.validatePacketPlan(packetPlan, stories);
 
       console.log(`[ForgePlannerClient] Packet plan received with ${packetPlan.packetPlan.length} DIPs`);
@@ -63,14 +52,11 @@ export class ForgePlannerClient {
     }
   }
 
-  private buildPlanningPrompt(
-    stories: StoryPayload[],
-    artifacts: { baPack: string; pdd: string; systemArch: string }
-  ): string {
+  private buildPlanningPrompt(stories: StoryPayload[], projectContext: string): string {
     const storyList = stories
       .map(
         (s) =>
-          `Story ID: ${s.storyId}\nTitle: ${s.title}\nDescription: ${s.description}\nAcceptance Criteria:\n${s.acceptanceCriteria.join('\n')}\n`
+          `Story ID: ${s.storyId}\nTitle: ${s.title}\nDescription: ${s.description}\nAcceptance Criteria:\n${s.acceptanceCriteria}\n`,
       )
       .join('\n---\n\n');
 
@@ -86,16 +72,9 @@ You have been given a batch of ${stories.length} ready stories from the same epi
 4. **Every story must appear in exactly one DIP**: No duplicates, no omissions.
 5. **Rationale is required**: Each DIP must include a clear explanation of why those stories were grouped together or separated.
 
-## Context Artifacts
+## Project Context
 
-### BA Pack
-${artifacts.baPack}
-
-### Product Design Document
-${artifacts.pdd}
-
-### System Architecture
-${artifacts.systemArch}
+${projectContext}
 
 ## Stories to Plan
 
@@ -103,7 +82,7 @@ ${storyList}
 
 ## Required Output
 
-Return ONLY a valid JSON object matching this schema. No markdown fences. No explanation outside the JSON.
+Return ONLY a valid JSON object. No markdown fences. No explanation outside the JSON.
 
 {
   "packetPlan": [
@@ -111,11 +90,6 @@ Return ONLY a valid JSON object matching this schema. No markdown fences. No exp
       "dipId": "dip-1",
       "storyIds": ["ORKY-36", "ORKY-37"],
       "rationale": "Stories 9.1 and 9.2 both add new tables and repositories with no file overlap. Safe to batch."
-    },
-    {
-      "dipId": "dip-2",
-      "storyIds": ["ORKY-38"],
-      "rationale": "Story 9.3 modifies forgeClient.ts which 9.4 also modifies. Must be separate to avoid conflicts."
     }
   ]
 }
@@ -124,21 +98,18 @@ Generate the Packet Plan now.`;
   }
 
   private parsePacketPlan(rawText: string): PacketPlan {
-    let jsonText = rawText.trim();
+    const jsonText = rawText
+      .trim()
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '');
 
-    if (jsonText.startsWith('```json')) {
-      jsonText = jsonText.replace(/^```json\s*/, '');
-    }
-    if (jsonText.startsWith('```')) {
-      jsonText = jsonText.replace(/^```\s*/, '');
-    }
-    if (jsonText.endsWith('```')) {
-      jsonText = jsonText.replace(/\s*```$/, '');
-    }
+    const start = jsonText.indexOf('{');
+    const end = jsonText.lastIndexOf('}');
+    const extracted = start !== -1 && end > start ? jsonText.slice(start, end + 1) : jsonText;
 
     try {
-      const parsed = JSON.parse(jsonText);
-      return parsed as PacketPlan;
+      return JSON.parse(extracted) as PacketPlan;
     } catch (err: unknown) {
       if (err instanceof Error) {
         throw new Error(`Failed to parse Packet Plan JSON: ${err.message}`);
@@ -148,12 +119,8 @@ Generate the Packet Plan now.`;
   }
 
   private validatePacketPlan(plan: PacketPlan, stories: StoryPayload[]): void {
-    if (!plan.packetPlan || !Array.isArray(plan.packetPlan)) {
-      throw new Error('Packet Plan must contain a packetPlan array');
-    }
-
-    if (plan.packetPlan.length === 0) {
-      throw new Error('Packet Plan must contain at least one DIP');
+    if (!plan.packetPlan || !Array.isArray(plan.packetPlan) || plan.packetPlan.length === 0) {
+      throw new Error('Packet Plan must contain a non-empty packetPlan array');
     }
 
     const allStoryIds = stories.map((s) => s.storyId);
@@ -163,24 +130,19 @@ Generate the Packet Plan now.`;
       if (!dip.dipId || typeof dip.dipId !== 'string') {
         throw new Error('Each DIP must have a valid dipId');
       }
-
       if (!dip.storyIds || !Array.isArray(dip.storyIds) || dip.storyIds.length === 0) {
         throw new Error(`DIP ${dip.dipId} must contain at least one storyId`);
       }
-
       if (!dip.rationale || typeof dip.rationale !== 'string') {
         throw new Error(`DIP ${dip.dipId} must include a rationale`);
       }
-
       for (const storyId of dip.storyIds) {
         if (!allStoryIds.includes(storyId)) {
           throw new Error(`DIP ${dip.dipId} references unknown story: ${storyId}`);
         }
-
         if (seenStoryIds.has(storyId)) {
           throw new Error(`Story ${storyId} appears in multiple DIPs`);
         }
-
         seenStoryIds.add(storyId);
       }
     }

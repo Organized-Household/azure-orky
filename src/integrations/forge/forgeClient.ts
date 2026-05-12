@@ -297,6 +297,11 @@ You implement specifications exactly as written. You write safe, production-qual
 - Never add required env var checks that would block startup — new env vars must have safe defaults or be optional
 - No new model files in src/db/models/ unless the story explicitly requires a TypeScript interface for a new table
 - All new DB repositories follow the pattern in src/db/repositories/executionRepository.ts: getPool(), $1/$2 params, catch (err: unknown)
+- Claude API model string must be exactly 'claude-sonnet-4-5' — never any other model identifier
+- Never import from a module that does not appear in the codebase snapshot or in fileOperations of this DIP — if a dependency does not exist, create it in fileOperations or use an existing module
+- StoryPayload fields: storyId (string), title (string), description (string), acceptanceCriteria (string — NOT string[]), jiraIssueKey (string), PDEStoryID (string), PDEEpicID (string | undefined)
+- If a fileOperation creates a DB repository that queries a table, fileOperations MUST also include the migration SQL file for that table
+- Project context artifacts are fetched via ProjectContextRepository.getAll() in src/db/repositories/projectContextRepository.ts — never invent an ArtifactResolver or similar abstraction
 
 ## Execution State Machine
 RECEIVED → VALIDATED → STORY_FETCHED → ARTIFACTS_RESOLVED →

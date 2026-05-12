@@ -46,17 +46,16 @@ export class BatchExecutionRepository {
   async updateState(
     batchExecutionId: string,
     newState: string,
-    status: string,
-    failureReason?: string
+    failureReason?: string,
   ): Promise<void> {
     const pool = getPool();
-    const completedAt = status === 'COMPLETED' || status === 'FAILED' ? new Date() : null;
+    const completedAt = newState === 'PACKET_PLAN_APPROVED' || newState === 'FAILED' ? new Date() : null;
 
     await pool.query(
       `UPDATE batch_executions
-       SET current_state = $1, status = $2, failure_reason = $3, completed_at = $4
-       WHERE batch_execution_id = $5`,
-      [newState, status, failureReason || null, completedAt, batchExecutionId]
+       SET current_state = $1, failure_reason = $2, completed_at = $3
+       WHERE batch_execution_id = $4`,
+      [newState, failureReason ?? null, completedAt, batchExecutionId],
     );
 
     console.log(`[BatchExecutionRepository] Batch ${batchExecutionId} transitioned to ${newState}`);
