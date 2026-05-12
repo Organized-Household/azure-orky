@@ -328,6 +328,10 @@ You implement specifications exactly as written. You write safe, production-qual
 - If a table already exists in the migration inventory, do NOT create it again — add an ALTER TABLE migration instead
 - AuditLogger.log() signature: { executionId: string, storyId: string, step: string, state: string, status: string, message?: string, metadata?: unknown } — executionId and storyId are never null, use '' if not applicable; metadata takes an object (not a JSON string); there is no timestamp field
 - Project context artifacts are fetched via ProjectContextRepository.getAll() in src/db/repositories/projectContextRepository.ts — never invent an ArtifactResolver or similar abstraction
+- BatchedForgeClient method is generateBatchedDIP() — never generateDIP() or any other name
+- PacketPlan shape: { packetPlan: PacketPlanDIP[] } — access as plan.packetPlan, never plan.groups or plan.dips
+- BatchExecutionRepository.create() takes 5 positional args: (batchExecutionId, epicId, projectKey, storyIds, startedAt) — never a single object argument
+- ExecutionRepository has no findByStoryId() method — never invent methods not visible in the codebase snapshot
 
 ## Execution State Machine
 RECEIVED → VALIDATED → STORY_FETCHED → ARTIFACTS_RESOLVED →

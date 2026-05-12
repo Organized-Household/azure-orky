@@ -5,7 +5,7 @@ import { PacketNegotiationRepository } from '../db/repositories/packetNegotiatio
 import { ExecutionRepository } from '../db/repositories/executionRepository';
 import { CompilationChecker } from '../integrations/typescript/compilationChecker';
 
-const MAX_ROUNDS = 3;
+const MAX_ROUNDS = parseInt(process.env.NEGOTIATION_MAX_ROUNDS ?? '5', 10);
 
 export interface NegotiationResult {
   approved: boolean;
