@@ -1,24 +1,99 @@
 import { getPool } from '../dbClient';
-import { PacketPlan } from '../../integrations/forge/forgePlannerClient';
 
-export interface BatchExecutionRow {
-  batch_execution_id: string;
-  epic_id: string;
-  project_key: string;
+export interface BatchExecutionRecord {
+  batchExecutionId: string;
+  epicId: string;
+  storyIds: string[];
   status: string;
-  current_state: string;
-  story_ids: string[];
-  packet_plan_json: PacketPlan | null;
-  started_at: Date;
-  completed_at: Date | null;
-  failure_reason: string | null;
+  startedAt: Date;
+  collectedAt?: Date;
+  packetPlanJson?: string;
+  completedAt?: Date;
+  failureReason?: string;
 }
 
 export class BatchExecutionRepository {
-  async findById(batchExecutionId: string): Promise<BatchExecutionRow | null> {
+  async create(record: BatchExecutionRecord): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO batch_executions (
+        batch_execution_id,
+        epic_id,
+        story_ids,
+        status,
+        started_at,
+        collected_at,
+        packet_plan_json,
+        completed_at,
+        failure_reason
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        record.batchExecutionId,
+        record.epicId,
+        JSON.stringify(record.storyIds),
+        record.status,
+        record.startedAt,
+        record.collectedAt || null,
+        record.packetPlanJson || null,
+        record.completedAt || null,
+        record.failureReason || null
+      ]
+    );
+  }
+
+  async updateStatus(
+    batchExecutionId: string,
+    status: string,
+    failureReason?: string
+  ): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE batch_executions
+       SET status = $1, failure_reason = $2
+       WHERE batch_execution_id = $3`,
+      [status, failureReason || null, batchExecutionId]
+    );
+  }
+
+  async updatePacketPlan(
+    batchExecutionId: string,
+    packetPlanJson: string
+  ): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE batch_executions
+       SET packet_plan_json = $1
+       WHERE batch_execution_id = $2`,
+      [packetPlanJson, batchExecutionId]
+    );
+  }
+
+  async complete(
+    batchExecutionId: string,
+    status: string
+  ): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE batch_executions
+       SET status = $1, completed_at = NOW()
+       WHERE batch_execution_id = $2`,
+      [status, batchExecutionId]
+    );
+  }
+
+  async getById(batchExecutionId: string): Promise<BatchExecutionRecord | null> {
     const pool = getPool();
     const result = await pool.query(
-      `SELECT batch_execution_id, epic_id, project_key, status, current_state, story_ids, packet_plan_json, started_at, completed_at, failure_reason
+      `SELECT
+        batch_execution_id,
+        epic_id,
+        story_ids,
+        status,
+        started_at,
+        collected_at,
+        packet_plan_json,
+        completed_at,
+        failure_reason
        FROM batch_executions
        WHERE batch_execution_id = $1`,
       [batchExecutionId]
@@ -28,36 +103,49 @@ export class BatchExecutionRepository {
       return null;
     }
 
-    return result.rows[0] as BatchExecutionRow;
+    const row = result.rows[0];
+    return {
+      batchExecutionId: row.batch_execution_id,
+      epicId: row.epic_id,
+      storyIds: JSON.parse(row.story_ids),
+      status: row.status,
+      startedAt: row.started_at,
+      collectedAt: row.collected_at,
+      packetPlanJson: row.packet_plan_json,
+      completedAt: row.completed_at,
+      failureReason: row.failure_reason
+    };
   }
 
-  async updatePacketPlan(batchExecutionId: string, packetPlan: PacketPlan): Promise<void> {
+  async getByEpicId(epicId: string): Promise<BatchExecutionRecord[]> {
     const pool = getPool();
-    await pool.query(
-      `UPDATE batch_executions
-       SET packet_plan_json = $1
-       WHERE batch_execution_id = $2`,
-      [JSON.stringify(packetPlan), batchExecutionId]
+    const result = await pool.query(
+      `SELECT
+        batch_execution_id,
+        epic_id,
+        story_ids,
+        status,
+        started_at,
+        collected_at,
+        packet_plan_json,
+        completed_at,
+        failure_reason
+       FROM batch_executions
+       WHERE epic_id = $1
+       ORDER BY started_at DESC`,
+      [epicId]
     );
 
-    console.log(`[BatchExecutionRepository] Packet plan stored for batch ${batchExecutionId}`);
-  }
-
-  async updateState(
-    batchExecutionId: string,
-    newState: string,
-    failureReason?: string,
-  ): Promise<void> {
-    const pool = getPool();
-    const completedAt = newState === 'PACKET_PLAN_APPROVED' || newState === 'FAILED' ? new Date() : null;
-
-    await pool.query(
-      `UPDATE batch_executions
-       SET current_state = $1, failure_reason = $2, completed_at = $3
-       WHERE batch_execution_id = $4`,
-      [newState, failureReason ?? null, completedAt, batchExecutionId],
-    );
-
-    console.log(`[BatchExecutionRepository] Batch ${batchExecutionId} transitioned to ${newState}`);
+    return result.rows.map((row) => ({
+      batchExecutionId: row.batch_execution_id,
+      epicId: row.epic_id,
+      storyIds: JSON.parse(row.story_ids),
+      status: row.status,
+      startedAt: row.started_at,
+      collectedAt: row.collected_at,
+      packetPlanJson: row.packet_plan_json,
+      completedAt: row.completed_at,
+      failureReason: row.failure_reason
+    }));
   }
 }
