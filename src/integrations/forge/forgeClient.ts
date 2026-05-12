@@ -40,6 +40,16 @@ function stripMarkdownFences(text: string): string {
     .trim();
 }
 
+// Extract outermost JSON object from text that may have leading/trailing prose
+function extractJsonObject(text: string): string {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    return text.slice(start, end + 1);
+  }
+  return text;
+}
+
 export class ForgeClient {
   private client: Anthropic;
   private readonly timeoutMs = 120_000;
@@ -123,7 +133,7 @@ A reviewer has identified the following compatibility issues with the previous p
 
 ${issueList}
 
-Return a corrected JSON packet that resolves every issue listed above.`;
+Return ONLY the corrected JSON object. No markdown fences. No explanation. No text before or after the JSON object.`;
 
     let lastError: unknown;
 
@@ -144,7 +154,7 @@ Return a corrected JSON packet that resolves every issue listed above.`;
 
         const block = response.content[0];
         const text = block.type === 'text' ? block.text : '';
-        const cleaned = stripMarkdownFences(text);
+        const cleaned = extractJsonObject(stripMarkdownFences(text));
 
         try {
           return JSON.parse(cleaned) as InstructionPacket;
