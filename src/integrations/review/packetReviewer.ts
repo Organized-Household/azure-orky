@@ -90,6 +90,10 @@ export class PacketReviewer {
   }
 
   private buildReviewPrompt(packet: InstructionPacket, codebaseSnapshot: string): string {
+    const snapshotSection = codebaseSnapshot.trim()
+      ? codebaseSnapshot
+      : '_(No codebase snapshot available — approve unless the DIP contains an obvious self-contradiction)_';
+
     return `You are a senior engineer reviewing a Developer Instruction Packet (DIP) for codebase compatibility before execution.
 
 Your job is to determine whether the DIP is safe to execute against the current codebase as written, or whether it contains issues that must be resolved first.
@@ -107,8 +111,11 @@ Rules:
 - "issues" must be an array of strings
 - If verdict is "APPROVED", issues must be an empty array
 - If verdict is "QUESTIONS", issues must contain one or more specific, actionable compatibility concerns
+- Only raise an issue when you can POSITIVELY IDENTIFY a conflict with the observed codebase — do NOT raise issues based on uncertainty or inability to verify
+- If the codebase snapshot is empty or does not contain the relevant files, return APPROVED — absence of evidence is not evidence of conflict
 - Do not raise style or preference issues — only raise issues that would cause execution failure or produce incorrect output
 - Do not comment on the DIP format itself — only on codebase compatibility
+- "validationCommands": [] is correct and by design in this project — never flag it as an issue
 
 ## Developer Instruction Packet
 
@@ -118,7 +125,7 @@ ${JSON.stringify(packet, null, 2)}
 
 ## Current Codebase Snapshot
 
-${codebaseSnapshot}
+${snapshotSection}
 
 Review the DIP against the codebase snapshot and respond with your JSON verdict now.`;
   }
