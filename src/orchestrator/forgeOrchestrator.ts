@@ -111,8 +111,8 @@ export class ForgeOrchestrator {
       this.auditLogger,
     );
 
-    const forgeRevise = async (issues: string[]): Promise<InstructionPacket> => {
-      return this.forgeClient.revise(storyPayload, issues);
+    const forgeRevise = async (issues: string[], currentPacket: InstructionPacket): Promise<InstructionPacket> => {
+      return this.forgeClient.revise(storyPayload, issues, currentPacket);
     };
 
     const negotiationResult = await negotiationOrchestrator.negotiate(

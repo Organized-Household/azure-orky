@@ -121,17 +121,31 @@ export class ForgeClient {
     );
   }
 
-  async revise(storyPayload: StoryPayload, issues: string[]): Promise<InstructionPacket> {
+  async revise(storyPayload: StoryPayload, issues: string[], currentPacket: InstructionPacket): Promise<InstructionPacket> {
     const context = await this.assembleContext(storyPayload);
     const basePrompt = this.buildPrompt(storyPayload, context);
     const issueList = issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n');
+
+    const currentFilesSection = currentPacket.fileOperations
+      .filter((op) => op.content !== undefined)
+      .map((op) => `#### \`${op.path}\` (${op.operation})\n\`\`\`typescript\n${op.content}\n\`\`\``)
+      .join('\n\n');
+
     const prompt = `${basePrompt}
+
+---
+
+## Previous DIP File Operations (what you wrote last time)
+
+The following files were in your previous packet. Study them carefully — the issues below are errors IN these files that you must fix:
+
+${currentFilesSection || '_(no file content available)_'}
 
 ---
 
 ## Revision Required
 
-A reviewer has identified the following compatibility issues with the previous packet. You must address ALL of them in your revised output:
+Fix ALL of the following issues in your revised output. Each issue references a specific file and line number from the files above:
 
 ${issueList}
 
