@@ -59,6 +59,7 @@ export const epicFileMap: Record<string, string[]> = {
     'src/orchestrator/forgeOrchestrator.ts',
     'src/orchestrator/packetNegotiationOrchestrator.ts',
     'src/integrations/review/packetReviewer.ts',
+    'src/integrations/typescript/compilationChecker.ts',
     'src/db/repositories/packetNegotiationRepository.ts',
     'src/db/repositories/instructionPacketRepository.ts',
   ],
