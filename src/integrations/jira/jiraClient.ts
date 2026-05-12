@@ -88,6 +88,24 @@ export class JiraClient {
     }
   }
 
+  async addLabel(issueKey: string, label: string): Promise<void> {
+    const url = `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.email}:${this.apiToken}`).toString('base64')}`,
+      },
+      body: JSON.stringify({ update: { labels: [{ add: label }] } }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Jira add label failed for ${issueKey}: ${response.status} ${errorBody}`);
+    }
+  }
+
   async getIssue(issueId: string): Promise<unknown> {
     const url = `${this.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueId)}`;
     console.log('[JiraClient] Fetching issue:', url);

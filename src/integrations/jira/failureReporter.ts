@@ -56,6 +56,28 @@ export class FailureReporter {
       });
     }
 
+    try {
+      await this.jiraClient.addLabel(issueKey, 'orky-failed');
+
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'jira_failure_label_added',
+        state: 'FAILED',
+        status: 'success',
+        message: `Added 'orky-failed' label to ${issueKey} to suppress webhook re-trigger`,
+      });
+    } catch (err: unknown) {
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'jira_failure_label_failed',
+        state: 'FAILED',
+        status: 'warn',
+        message: `Could not add 'orky-failed' label to ${issueKey}: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
     const failureTransitionId = process.env.JIRA_FAILURE_TRANSITION_ID;
     if (failureTransitionId) {
       try {

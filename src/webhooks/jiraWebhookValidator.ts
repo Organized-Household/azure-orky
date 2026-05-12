@@ -67,6 +67,18 @@ export function validateJiraWebhookPayload(
   const issue = asRecord(root.issue);
   const fields = asRecord(issue.fields);
 
+  const labels: string[] = Array.isArray(fields.labels)
+    ? fields.labels.map((l: unknown) => (typeof l === 'string' ? l : String(l)))
+    : [];
+
+  if (labels.includes('orky-failed')) {
+    return {
+      valid: false,
+      ignored: true,
+      reason: 'orky-failed label present — manual retry required',
+    };
+  }
+
   const storyId = toPlainText(issue.key);
   const issueId = toPlainText(issue.id);
 
