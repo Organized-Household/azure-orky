@@ -79,7 +79,7 @@ export class ForgeClient {
         const response = await this.client.messages.create(
           {
             model: 'claude-sonnet-4-5',
-            max_tokens: 8192,
+            max_tokens: 16000,
             messages: [{ role: 'user', content: prompt }],
           },
           { timeout: this.timeoutMs },
@@ -148,7 +148,7 @@ Return ONLY the corrected JSON object. No markdown fences. No explanation. No te
         const response = await this.client.messages.create(
           {
             model: 'claude-sonnet-4-5',
-            max_tokens: 8192,
+            max_tokens: 16000,
             messages: [{ role: 'user', content: prompt }],
           },
           { timeout: this.timeoutMs },
