@@ -13,14 +13,7 @@ export interface BatchedDIPRequest {
     acceptanceCriteria: string;
     jiraIssueKey: string;
   }>;
-  baPack: string;
-  developerExecutionPacket: string;
-  engineeringSpec: string;
-  manifest: string;
-  productDesignDocument: string;
-  productIntentBrief: string;
-  qaPacket: string;
-  systemArch: string;
+  projectContext: string;
   implementationHistory: string;
   codebaseSnapshot: string;
 }
@@ -46,20 +39,14 @@ export interface BatchedDIP {
 
 export class BatchedForgeClient {
   private client: Anthropic;
-  private auditLogger: AuditLogger;
 
-  constructor(auditLogger: AuditLogger) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required');
-    }
-    this.client = new Anthropic({ apiKey });
-    this.auditLogger = auditLogger;
+  constructor(private auditLogger: AuditLogger) {
+    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   }
 
   async generateBatchedDIP(request: BatchedDIPRequest): Promise<BatchedDIP> {
     const requestId = uuidv4();
-    
+
     await this.auditLogger.log({
       executionId: request.batchExecutionId,
       storyId: request.storyIds.join(','),
@@ -67,7 +54,7 @@ export class BatchedForgeClient {
       state: 'FORGE_INVOKED',
       status: 'IN_PROGRESS',
       message: `Invoking Forge for batched DIP with ${request.storyIds.length} stories`,
-      metadata: { requestId, storyIds: request.storyIds }
+      metadata: { requestId, storyIds: request.storyIds },
     });
 
     const prompt = this.buildBatchedDIPPrompt(request);
@@ -75,8 +62,8 @@ export class BatchedForgeClient {
     try {
       const response = await this.client.messages.create({
         model: 'claude-sonnet-4-5',
-        max_tokens: 200000,
-        messages: [{ role: 'user', content: prompt }]
+        max_tokens: 8192,
+        messages: [{ role: 'user', content: prompt }],
       });
 
       const content = response.content[0];
@@ -91,9 +78,9 @@ export class BatchedForgeClient {
         storyId: request.storyIds.join(','),
         step: 'BATCHED_DIP_GENERATION',
         state: 'PACKET_RECEIVED',
-        status: 'SUCCESS',
+        status: 'success',
         message: `Batched DIP generated successfully: ${dip.packetId}`,
-        metadata: { packetId: dip.packetId, fileOperationCount: dip.fileOperations.length }
+        metadata: { packetId: dip.packetId, fileOperationCount: dip.fileOperations.length },
       });
 
       return dip;
@@ -104,25 +91,29 @@ export class BatchedForgeClient {
         storyId: request.storyIds.join(','),
         step: 'BATCHED_DIP_GENERATION',
         state: 'FORGE_INVOKED',
-        status: 'FAILED',
+        status: 'error',
         message: `Batched DIP generation failed: ${error.message}`,
-        metadata: { error: error.message, requestId }
+        metadata: { error: error.message, requestId },
       });
       throw error;
     }
   }
 
   private buildBatchedDIPPrompt(request: BatchedDIPRequest): string {
-    const storySection = request.stories.map((story, index) => {
-      return `### Story ${index + 1}: ${story.jiraIssueKey} — ${story.title}
+    const storySection = request.stories
+      .map(
+        (story, index) => `### Story ${index + 1}: ${story.jiraIssueKey} — ${story.title}
 
 **Description:**
 ${story.description}
 
 **Acceptance Criteria:**
 ${story.acceptanceCriteria}
-`;
-    }).join('\n---\n\n');
+`,
+      )
+      .join('\n---\n\n');
+
+    const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
 
     return `You are Forge, Senior SaaS Engineer implementing Orky, the AI-Orchestrated SaaS Engineering System.
 
@@ -130,7 +121,7 @@ You implement specifications exactly as written. You write safe, production-qual
 
 ## Tech Stack
 - Node.js + TypeScript, Supabase PostgreSQL, Railway Container (node:22-alpine)
-- GitHub repo: orkyai25-ctrl/orky, default branch: dev
+- GitHub repo: ${repoOwner}/orky, default branch: dev
 - pg driver — $1/$2 positional params only. Never named params.
 
 ## Hard Constraints — Never Violate
@@ -145,47 +136,27 @@ You implement specifications exactly as written. You write safe, production-qual
 - No new npm packages without Architect approval
 - No standalone services — integrate into existing src/ module structure
 - Never log GH_TOKEN, ANTHROPIC_API_KEY, or any credential
-- Logging: console.log() and console.error() only — never import a logger library
+- Logging: console.log() and console.error() only — never import a logger library (no winston, pino, bunyan, utils/logger, or any logger module)
 - Forge is invoked via @anthropic-ai/sdk (already installed) — never via fetch(), axios, or any HTTP client
 - Never create or modify src/config/env.ts — read env vars directly with process.env
-- Never add required env var checks that would block startup
+- Never add required env var checks that would block startup — new env vars must have safe defaults or be optional
 - No new model files in src/db/models/ unless the story explicitly requires a TypeScript interface for a new table
 - All new DB repositories follow the pattern in src/db/repositories/executionRepository.ts: getPool(), $1/$2 params, catch (err: unknown)
-- Claude API model string must be exactly 'claude-sonnet-4-5'
-- Never import from a module that does not appear in the codebase snapshot or in fileOperations of this DIP
-- StoryPayload fields: storyId (string), title (string), description (string), acceptanceCriteria (string), jiraIssueKey (string), PDEStoryID (string), PDEEpicID (string | undefined)
+- Claude API model string must be exactly 'claude-sonnet-4-5' — never any other model identifier
+- Never import from a module that does not appear in the codebase snapshot or in fileOperations of this DIP — if a dependency does not exist, create it in fileOperations or use an existing module
+- StoryPayload fields: storyId (string), title (string), description (string), acceptanceCriteria (string — NOT string[]), jiraIssueKey (string), PDEStoryID (string), PDEEpicID (string | undefined)
 - If a fileOperation creates a DB repository that queries a table, fileOperations MUST also include the migration SQL file for that table
 - Migration files MUST be placed at migrations/<NNN>_description.sql at the repo root — NEVER inside src/ or any subdirectory
 - Migration numbering: use the next sequential number after the highest existing migration
 - If a table already exists in the migration inventory, do NOT create it again — add an ALTER TABLE migration instead
 - AuditLogger.log() signature: { executionId: string, storyId: string, step: string, state: string, status: string, message?: string, metadata?: unknown } — executionId and storyId are never null, use '' if not applicable; metadata takes an object (not a JSON string); there is no timestamp field
-- Project context artifacts are fetched via ProjectContextRepository.getAll() in src/db/repositories/projectContextRepository.ts
+- Project context artifacts are fetched via ProjectContextRepository.getAll() in src/db/repositories/projectContextRepository.ts — never invent an ArtifactResolver or similar abstraction
+
+---
 
 ## Project Context (PDE Artifacts)
 
-### BA_PACK
-${request.baPack}
-
-### DEVELOPER_EXECUTION_PACKET
-${request.developerExecutionPacket}
-
-### ENGINEERING_SPEC
-${request.engineeringSpec}
-
-### MANIFEST
-${request.manifest}
-
-### PRODUCT_DESIGN_DOCUMENT
-${request.productDesignDocument}
-
-### PRODUCT_INTENT_BRIEF
-${request.productIntentBrief}
-
-### QA_PACKET
-${request.qaPacket}
-
-### SYSTEM_ARCH
-${request.systemArch}
+${request.projectContext}
 
 ---
 
@@ -217,7 +188,7 @@ Schema:
 {
   "packetId": "<uuid>",
   "storyIds": ${JSON.stringify(request.storyIds)},
-  "targetRepository": "orkyai25-ctrl/orky",
+  "targetRepository": "${repoOwner}/orky",
   "baseBranch": "dev",
   "branchNameHint": "<kebab-case hint covering all stories>",
   "fileOperations": [
@@ -233,14 +204,20 @@ Schema:
   "commitMessage": "<conventional commit: feat(${request.storyIds.join('+')}): description>",
   "implementationSummary": "<human-readable summary of what was built and why, for the decision log>",
   "jiraLinkage": "${request.storyIds.join(', ')}"
-}
-`;
+}`;
   }
 
   private parseBatchedDIPResponse(responseText: string, expectedStoryIds: string[]): BatchedDIP {
     let parsed: unknown;
     try {
-      const cleaned = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const stripped = responseText
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+      const start = stripped.indexOf('{');
+      const end = stripped.lastIndexOf('}');
+      const cleaned = start !== -1 && end > start ? stripped.slice(start, end + 1) : stripped;
       parsed = JSON.parse(cleaned);
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -294,12 +271,16 @@ Schema:
     const expectedSet = new Set(expectedStoryIds);
     const returnedSet = new Set(returnedStoryIds);
 
-    if (returnedStoryIds.length !== expectedStoryIds.length || 
-        !returnedStoryIds.every(id => expectedSet.has(id)) ||
-        !expectedStoryIds.every(id => returnedSet.has(id))) {
-      throw new Error(`Batched DIP storyIds mismatch. Expected: ${expectedStoryIds.join(',')}, Got: ${returnedStoryIds.join(',')}`);
+    if (
+      returnedStoryIds.length !== expectedStoryIds.length ||
+      !returnedStoryIds.every((id) => expectedSet.has(id)) ||
+      !expectedStoryIds.every((id) => returnedSet.has(id))
+    ) {
+      throw new Error(
+        `Batched DIP storyIds mismatch. Expected: ${expectedStoryIds.join(',')}, Got: ${returnedStoryIds.join(',')}`,
+      );
     }
 
-    return dip as BatchedDIP;
+    return dip as unknown as BatchedDIP;
   }
 }
