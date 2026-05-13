@@ -30,7 +30,8 @@ function isRetryable(error: unknown): boolean {
   return (
     error instanceof APIConnectionTimeoutError ||
     error instanceof InternalServerError ||
-    (error instanceof APIError && error.status >= 500)
+    (error instanceof APIError && error.status >= 500) ||
+    (error instanceof APIError && error.status === 429)
   );
 }
 
@@ -56,7 +57,7 @@ export class ForgeClient {
   private client: Anthropic;
   private readonly timeoutMs = 120_000;
   private readonly maxRetries = 3;
-  private readonly backoffMs = [5_000, 30_000, 120_000];
+  private readonly backoffMs = [65_000, 120_000, 240_000];
 
   constructor() {
     this.client = new Anthropic({
@@ -122,8 +123,21 @@ export class ForgeClient {
   }
 
   async revise(storyPayload: StoryPayload, issues: string[], currentPacket: InstructionPacket): Promise<InstructionPacket> {
-    const context = await this.assembleContext(storyPayload);
-    const basePrompt = this.buildPrompt(storyPayload, context);
+    // Revision prompt is intentionally slim — omits PDE artifacts, history, and codebase snapshot
+    // (Forge already saw those in round 1). Only send what's needed to fix the specific errors.
+    let migrationInventory = '';
+    try {
+      const migrationsDir = path.join(process.cwd(), 'migrations');
+      migrationInventory = fs
+        .readdirSync(migrationsDir)
+        .filter((f) => f.endsWith('.sql'))
+        .sort()
+        .join('\n');
+    } catch {
+      migrationInventory = '_(unavailable)_';
+    }
+
+    const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
     const issueList = issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n');
 
     const currentFilesSection = currentPacket.fileOperations
@@ -131,25 +145,56 @@ export class ForgeClient {
       .map((op) => `#### \`${op.path}\` (${op.operation})\n\`\`\`typescript\n${op.content}\n\`\`\``)
       .join('\n\n');
 
-    const prompt = `${basePrompt}
+    const prompt = `You are Forge, Senior SaaS Engineer. Revise the Developer Instruction Packet (DIP) below to fix ALL listed issues.
 
----
+## Story
+ID: ${storyPayload.storyId} — ${storyPayload.title}
 
-## Previous DIP File Operations (what you wrote last time)
+## Hard Constraints — Never Violate
+- getPool() from src/db/dbClient.ts — never new Pool()
+- $1/$2 positional params only — never named params
+- catch (err: unknown) with explicit narrowing — never catch (err: any)
+- validationCommands: always []
+- Never import a logger library — console.log() and console.error() only
+- All PRs target dev branch, never main
+- GH_TOKEN env var — never GITHUB_TOKEN
+- Migration files in migrations/<NNN>_description.sql at repo root — never inside src/
+- AuditLogger.log() signature: { executionId: string, storyId: string, step: string, state: string, status: string, message?: string, metadata?: unknown }
+- ExecutionRepository exact methods (NEVER rename): create, updateState(executionId, state, failureReason?), getById, failIfNotTerminal, acquireLock, releaseLock, hasActiveOrCompletedExecution
+- BatchExecutionRepository.updateState(batchExecutionId, newState, failureReason?) — newState is typed as \`string\`, NEVER as a union type or enum — existing callers pass: 'STORIES_RETRIEVING', 'ARTIFACTS_RESOLVING', 'PACKET_PLANNING', 'PACKET_PLAN_APPROVED', 'DIPS_GENERATED', 'EXECUTING', 'COMPLETED', 'FAILED'
+- NEVER define BatchExecutionState as a union type or enum — it breaks batchOrchestrator.ts
+- Repository state-update methods MUST be named updateState — NEVER updateStatus
+- BatchExecutionRow snake_case properties: batch_execution_id, epic_id, current_state, story_ids, packet_plan_json
+- Claude API model string must be exactly 'claude-sonnet-4-5'
 
-The following files were in your previous packet. Study them carefully — the issues below are errors IN these files that you must fix:
+## Existing Migrations
+${migrationInventory}
+
+## Your Previous DIP File Operations (fix the errors in these)
 
 ${currentFilesSection || '_(no file content available)_'}
 
----
-
-## Revision Required
-
-Fix ALL of the following issues in your revised output. Each issue references a specific file and line number from the files above:
+## Issues to Fix
 
 ${issueList}
 
-Return ONLY the corrected JSON object. No markdown fences. No explanation. No text before or after the JSON object.`;
+Return ONLY the corrected full JSON object. No markdown fences. No explanation. No text outside the JSON.
+
+Schema:
+{
+  "packetId": "<uuid>",
+  "storyId": "${storyPayload.storyId}",
+  "targetRepository": "${repoOwner}/orky",
+  "baseBranch": "dev",
+  "branchNameHint": "<kebab-case>",
+  "fileOperations": [{ "operation": "create|modify|replace|delete", "path": "<path>", "content": "<full content>" }],
+  "validationCommands": [],
+  "prTitle": "<title>",
+  "prBody": "<markdown body>",
+  "commitMessage": "<conventional commit>",
+  "implementationSummary": "<summary>",
+  "jiraLinkage": "${storyPayload.jiraIssueKey ?? storyPayload.storyId}"
+}`;
 
     let lastError: unknown;
 
@@ -348,6 +393,7 @@ You implement specifications exactly as written. You write safe, production-qual
 - ExecutionRepository has no findByStoryId() method — never invent methods not visible in the codebase snapshot
 - ExecutionRepository exact methods (do NOT rename or remove any): create, updateState(executionId, state, failureReason?), getById, failIfNotTerminal, acquireLock, releaseLock, hasActiveOrCompletedExecution — never modify executionRepository.ts method signatures
 - BatchExecutionRepository exact methods: create(5 positional args), findById, updatePacketPlan, updateState(batchExecutionId, newState, failureReason?) — NEVER updateStatus on any repository ever
+- BatchExecutionRepository.updateState() newState parameter MUST remain typed as `string` — NEVER define a BatchExecutionState enum or union type; doing so breaks existing callers in batchOrchestrator.ts which pass: 'STORIES_RETRIEVING', 'ARTIFACTS_RESOLVING', 'PACKET_PLANNING', 'PACKET_PLAN_APPROVED', 'DIPS_GENERATED', 'EXECUTING', 'COMPLETED', 'FAILED'
 - BatchExecutionRow is the raw DB row type — properties are snake_case: current_state, story_ids, epic_id, batch_execution_id, packet_plan_json — access exactly as snake_case when reading from findById()
 - Repository state-update methods MUST be named updateState — NEVER updateStatus or any other variant in any repository, existing or new
 - NEVER modify src/db/repositories/executionRepository.ts — it is shared infrastructure used by all epics; only ADD to it if the story explicitly requires a new method on ExecutionRepository
