@@ -58,8 +58,8 @@ export class BatchExecutionRepository {
     failureReason?: string,
   ): Promise<void> {
     const pool = getPool();
-    const completedAt =
-      newState === 'PACKET_PLAN_APPROVED' || newState === 'FAILED' ? new Date() : null;
+    const terminalStates = ['PACKET_PLAN_APPROVED', 'FAILED', 'COMPLETED', 'PARTIALLY_FAILED'];
+    const completedAt = terminalStates.includes(newState) ? new Date() : null;
     await pool.query(
       `UPDATE batch_executions
        SET current_state = $1, failure_reason = $2, completed_at = $3
@@ -67,5 +67,47 @@ export class BatchExecutionRepository {
       [newState, failureReason ?? null, completedAt, batchExecutionId],
     );
     console.log(`[BatchExecutionRepository] Batch ${batchExecutionId} transitioned to ${newState}`);
+  }
+
+  async finalizeIfComplete(batchExecutionId: string): Promise<void> {
+    const pool = getPool();
+
+    // Count child executions still in-progress
+    const pendingResult = await pool.query(
+      `SELECT COUNT(*)::int AS cnt
+       FROM executions
+       WHERE batch_execution_id = $1
+         AND status NOT IN ('COMPLETED', 'FAILED')`,
+      [batchExecutionId],
+    );
+    const pendingCount = (pendingResult.rows[0]?.cnt as number) ?? 0;
+    if (pendingCount > 0) {
+      console.log(
+        `[BatchExecutionRepository] Batch ${batchExecutionId} has ${pendingCount} in-progress execution(s) — not finalizing yet`,
+      );
+      return;
+    }
+
+    // Count failed child executions
+    const failedResult = await pool.query(
+      `SELECT COUNT(*)::int AS cnt
+       FROM executions
+       WHERE batch_execution_id = $1
+         AND status = 'FAILED'`,
+      [batchExecutionId],
+    );
+    const failedCount = (failedResult.rows[0]?.cnt as number) ?? 0;
+    const finalState = failedCount > 0 ? 'PARTIALLY_FAILED' : 'COMPLETED';
+
+    await pool.query(
+      `UPDATE batch_executions
+       SET current_state = $1, completed_at = NOW()
+       WHERE batch_execution_id = $2
+         AND current_state NOT IN ('COMPLETED', 'PARTIALLY_FAILED', 'FAILED')`,
+      [finalState, batchExecutionId],
+    );
+    console.log(
+      `[BatchExecutionRepository] Batch ${batchExecutionId} finalized as ${finalState} (${failedCount} child execution(s) failed)`,
+    );
   }
 }
