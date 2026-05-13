@@ -112,7 +112,8 @@ Rules:
 - If verdict is "APPROVED", issues must be an empty array
 - If verdict is "QUESTIONS", issues must contain one or more specific, actionable compatibility concerns
 - Only raise an issue when you can POSITIVELY IDENTIFY a conflict with the observed codebase — do NOT raise issues based on uncertainty or inability to verify
-- If the codebase snapshot is empty or does not contain the relevant files, return APPROVED — absence of evidence is not evidence of conflict
+- If the codebase snapshot is empty, return APPROVED — you have no basis for any concern
+- If the DIP uses operation "modify", "replace", or "delete" on a file path that does NOT appear anywhere in the codebase snapshot, flag that specific path as a concern in QUESTIONS — you cannot verify it is safe to overwrite. New file creation (operation "create") for paths absent from the snapshot is expected and fine.
 - Do not raise style or preference issues — only raise issues that would cause execution failure or produce incorrect output
 - Do not comment on the DIP format itself — only on codebase compatibility
 - "validationCommands": [] is correct and by design in this project — never flag it as an issue
