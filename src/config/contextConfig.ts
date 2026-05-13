@@ -66,10 +66,14 @@ export const epicFileMap: Record<string, string[]> = {
     'src/db/repositories/instructionPacketRepository.ts',
   ],
   'EPIC-11': [
-    // Signature-critical files first — Forge must see these to generate correct types
-    'src/db/repositories/batchExecutionRepository.ts',
-    'src/db/repositories/executionRepository.ts',
+    'src/orchestrator/batchOrchestrator.ts',
+    'src/orchestrator/batchCollector.ts',
     'src/integrations/forge/forgePlannerClient.ts',
+    'src/integrations/forge/batchedForgeClient.ts',
+    'src/db/repositories/executionRepository.ts',
+    'src/db/repositories/batchExecutionRepository.ts',
+    'src/agents/repositoryMutationExecutor.ts',
+    'src/integrations/github/prOrchestrator.ts',
     'src/domain/storyPayload.ts',
     'src/audit/auditLogger.ts',
     // Orchestration layer — shows existing call patterns
