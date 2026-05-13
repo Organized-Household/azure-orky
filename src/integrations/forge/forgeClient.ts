@@ -389,7 +389,8 @@ You implement specifications exactly as written. You write safe, production-qual
 - Project context artifacts are fetched via ProjectContextRepository.getAll() in src/db/repositories/projectContextRepository.ts — never invent an ArtifactResolver or similar abstraction
 - BatchedForgeClient method is generateBatchedDIP() — never generateDIP() or any other name
 - PacketPlan shape: { packetPlan: PacketPlanDIP[] } — access as plan.packetPlan, never plan.groups or plan.dips
-- BatchExecutionRepository.create() takes 5 positional args: (batchExecutionId, epicId, projectKey, storyIds, startedAt) — never a single object argument
+- BatchExecutionRepository.create() takes 5 positional args: (batchExecutionId, epicId, projectKey, storyIds, startedAt) — never a single object argument; storyIds MUST be typed as \`string[]\` — NEVER \`string\` or any other type
+- BatchExecutionRepository.updatePacketPlan() second parameter packetPlan MUST be typed as \`PacketPlan\` — NEVER \`string\` or any serialized form; do NOT add JSON.stringify() around it
 - ExecutionRepository has no findByStoryId() method — never invent methods not visible in the codebase snapshot
 - ExecutionRepository exact methods (do NOT rename or remove any): create, updateState(executionId, state, failureReason?), getById, failIfNotTerminal, acquireLock, releaseLock, hasActiveOrCompletedExecution — never modify executionRepository.ts method signatures
 - BatchExecutionRepository exact methods: create(5 positional args), findById, updatePacketPlan, updateState(batchExecutionId, newState, failureReason?) — NEVER updateStatus on any repository ever
