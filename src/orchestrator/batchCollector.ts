@@ -1,6 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { BatchExecutionRepository } from '../db/repositories/batchExecutionRepository';
 import { AuditLogger } from '../audit/auditLogger';
+import { BatchOrchestrator } from './batchOrchestrator';
+import { StoryRetrievalService } from '../integrations/jira/storyRetrievalService';
+import { ForgePlannerClient } from '../integrations/forge/forgePlannerClient';
+import { BatchedForgeClient } from '../integrations/forge/batchedForgeClient';
 
 interface CollectionWindow {
   epicId: string;
@@ -120,7 +124,18 @@ export class BatchCollector {
     });
     console.log(`[BatchCollector] Window closed for epic ${epicId}. Batch ${batchExecutionId} created with ${window.storyIds.length} stories.`);
 
-    console.log(`[BatchCollector] Ready to invoke Packet Planning for batch execution ${batchExecutionId}.`);
+    // Fire-and-forget: batch processing runs asynchronously in the background
+    const batchOrchestrator = new BatchOrchestrator(
+      this.batchExecutionRepository,
+      new StoryRetrievalService(),
+      new ForgePlannerClient(),
+      new BatchedForgeClient(this.auditLogger),
+      this.auditLogger,
+    );
+    batchOrchestrator.processBatch(batchExecutionId).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[BatchCollector] Batch processing failed for ${batchExecutionId}: ${message}`);
+    });
   }
 
   async shutdown(): Promise<void> {

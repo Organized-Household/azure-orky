@@ -1,11 +1,17 @@
 import { AuditLogger } from '../audit/auditLogger';
 import { BatchExecutionRepository } from '../db/repositories/batchExecutionRepository';
 import { DecisionLogRepository } from '../db/repositories/decisionLogRepository';
+import { ExecutionRepository } from '../db/repositories/executionRepository';
 import { ProjectContextRepository } from '../db/repositories/projectContextRepository';
-import { StoryRetrievalService } from '../integrations/jira/storyRetrievalService';
-import { ForgePlannerClient, PacketPlan } from '../integrations/forge/forgePlannerClient';
+import { RepoChangeSetRepository } from '../db/repositories/repoChangeSetRepository';
+import { InstructionPacket } from '../domain/instructionPacket';
+import { EXECUTION_STATES, ExecutionState, StoryPayload } from '../domain/storyPayload';
+import { RepositoryMutationExecutor } from '../agents/repositoryMutationExecutor';
 import { BatchedForgeClient, BatchedDIP } from '../integrations/forge/batchedForgeClient';
-import { StoryPayload } from '../domain/storyPayload';
+import { ForgePlannerClient, PacketPlan } from '../integrations/forge/forgePlannerClient';
+import { PrOrchestrator } from '../integrations/github/prOrchestrator';
+import { JiraUpdater } from '../integrations/jira/jiraUpdater';
+import { StoryRetrievalService } from '../integrations/jira/storyRetrievalService';
 
 export class BatchOrchestrator {
   constructor(
@@ -56,6 +62,7 @@ export class BatchOrchestrator {
       await this.batchRepo.updatePacketPlan(batchExecutionId, packetPlan);
       await this.batchRepo.updateState(batchExecutionId, 'PACKET_PLAN_APPROVED');
 
+      await this.batchRepo.updateState(batchExecutionId, 'EXECUTING');
       await this.generateDIPsFromPlan(
         batchExecutionId,
         batch.epic_id,
@@ -64,7 +71,8 @@ export class BatchOrchestrator {
         projectContext,
       );
 
-      await this.batchRepo.updateState(batchExecutionId, 'DIPS_GENERATED');
+      // Finalize batch state based on child execution outcomes
+      await this.batchRepo.finalizeIfComplete(batchExecutionId);
 
       await this.auditLogger.log({
         executionId: batchExecutionId,
@@ -221,7 +229,7 @@ export class BatchOrchestrator {
           codebaseSnapshot,
         });
 
-        await this.persistDIP(batchExecutionId, dip);
+        await this.persistDIP(batchExecutionId, epicId, dip, dipStories);
 
         await this.auditLogger.log({
           executionId: batchExecutionId,
@@ -229,7 +237,7 @@ export class BatchOrchestrator {
           step: 'DIP_GENERATION',
           state: 'DIP_GENERATED',
           status: 'success',
-          message: `DIP generated successfully: ${dip.packetId}`,
+          message: `DIP generated and executed successfully: ${dip.packetId}`,
           metadata: { packetId: dip.packetId, fileOperationCount: dip.fileOperations.length },
         });
       } catch (err: unknown) {
@@ -240,22 +248,115 @@ export class BatchOrchestrator {
           step: 'DIP_GENERATION',
           state: 'FAILED',
           status: 'error',
-          message: `DIP generation failed for stories ${dipItem.storyIds.join(', ')}: ${error.message}`,
+          message: `DIP generation/execution failed for stories ${dipItem.storyIds.join(', ')}: ${error.message}`,
           metadata: { error: error.message, storyIds: dipItem.storyIds },
         });
       }
     }
   }
 
-  private async persistDIP(batchExecutionId: string, dip: BatchedDIP): Promise<void> {
-    await this.auditLogger.log({
-      executionId: batchExecutionId,
+  private async persistDIP(
+    batchExecutionId: string,
+    epicId: string,
+    dip: BatchedDIP,
+    dipStories: StoryPayload[],
+  ): Promise<void> {
+    const executionRepo = new ExecutionRepository();
+    const primaryStory = dipStories[0];
+
+    // Create child execution record linked to this batch
+    const execution = await executionRepo.create({
       storyId: dip.storyIds.join(','),
-      step: 'DIP_PERSISTENCE',
-      state: 'PERSISTED',
-      status: 'success',
-      message: `DIP ${dip.packetId} ready (persistence to DB pending EPIC-10 schema integration)`,
-      metadata: { packetId: dip.packetId, storyIds: dip.storyIds },
+      epicId,
+      batchExecutionId,
+      status: EXECUTION_STATES.RECEIVED as ExecutionState,
+      currentState: EXECUTION_STATES.RECEIVED as ExecutionState,
     });
+
+    await this.auditLogger.log({
+      executionId: execution.executionId,
+      storyId: dip.storyIds.join(','),
+      step: 'CHILD_EXECUTION_CREATED',
+      state: 'RECEIVED',
+      status: 'success',
+      message: `Child execution ${execution.executionId} created for DIP ${dip.packetId} (batch: ${batchExecutionId})`,
+      metadata: { packetId: dip.packetId, batchExecutionId, storyIds: dip.storyIds },
+    });
+
+    // Build InstructionPacket from BatchedDIP
+    const packet: InstructionPacket = {
+      packetId: dip.packetId,
+      storyId: dip.storyIds[0],
+      targetRepository: dip.targetRepository,
+      baseBranch: dip.baseBranch,
+      branchNameHint: dip.branchNameHint,
+      fileOperations: dip.fileOperations,
+      validationCommands: dip.validationCommands,
+      prTitle: dip.prTitle,
+      prBody: dip.prBody,
+      commitMessage: dip.commitMessage,
+      implementationSummary: dip.implementationSummary,
+      jiraLinkage: dip.jiraLinkage,
+    };
+
+    // Execute repository mutations (clones repo, applies file ops, stores change set)
+    const mutationExecutor = new RepositoryMutationExecutor();
+    await mutationExecutor.execute(execution.executionId, dip.storyIds[0], packet);
+
+    // Create branch, commit, PR, run CI gate, optional auto-merge
+    const prOrchestrator = new PrOrchestrator();
+    await prOrchestrator.run({
+      executionId: execution.executionId,
+      storyId: dip.storyIds[0],
+      storyTitle: primaryStory?.title ?? dip.storyIds.join(' + '),
+      branchNameHint: dip.branchNameHint,
+      targetRepository: dip.targetRepository,
+      prTitle: dip.prTitle,
+      prBody: dip.prBody,
+      commitMessage: dip.commitMessage,
+    });
+
+    // ORKY-49: Post Jira success update for every story covered by this DIP
+    try {
+      const changeSetRepo = new RepoChangeSetRepository();
+      const prData = await changeSetRepo.getPrDataByExecutionId(execution.executionId);
+      if (prData?.prUrl) {
+        const jiraUpdater = new JiraUpdater(this.auditLogger);
+        for (const dipStory of dipStories) {
+          try {
+            await jiraUpdater.reportSuccess({
+              executionId: execution.executionId,
+              storyId: dipStory.storyId,
+              issueKey: dipStory.jiraIssueKey,
+              prUrl: prData.prUrl,
+              mergeSha: prData.mergeSha ?? '',
+            });
+          } catch (jiraErr: unknown) {
+            const msg = jiraErr instanceof Error ? jiraErr.message : String(jiraErr);
+            await this.auditLogger.log({
+              executionId: execution.executionId,
+              storyId: dipStory.storyId,
+              step: 'JIRA_UPDATE_FAILED',
+              state: 'COMPLETED',
+              status: 'warn',
+              message: `Jira update failed for ${dipStory.jiraIssueKey}: ${msg}`,
+            });
+          }
+        }
+      }
+    } catch (prDataErr: unknown) {
+      const msg = prDataErr instanceof Error ? prDataErr.message : String(prDataErr);
+      await this.auditLogger.log({
+        executionId: execution.executionId,
+        storyId: dip.storyIds.join(','),
+        step: 'JIRA_UPDATE_SKIPPED',
+        state: 'COMPLETED',
+        status: 'warn',
+        message: `Could not fetch PR data for Jira updates: ${msg}`,
+      });
+    }
+
+    // Check if all child executions for this batch are now terminal
+    await this.batchRepo.finalizeIfComplete(batchExecutionId);
   }
 }

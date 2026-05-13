@@ -8,6 +8,7 @@ export interface ExecutionRecord {
   issueId?: string;
   epicId?: string;
   projectKey?: string;
+  batchExecutionId?: string;
   status: ExecutionState;
   currentState: ExecutionState;
   startedAt?: Date;
@@ -20,6 +21,7 @@ export interface CreateExecutionInput {
   issueId?: string;
   epicId?: string;
   projectKey?: string;
+  batchExecutionId?: string;
   status?: ExecutionState;
   currentState?: ExecutionState;
   failureReason?: string;
@@ -35,8 +37,8 @@ export class ExecutionRepository {
     await pool.query(
       `INSERT INTO executions (
         execution_id, story_id, issue_id, epic_id, project_key,
-        status, current_state, failure_reason
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        status, current_state, failure_reason, batch_execution_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         executionId,
         input.storyId,
@@ -46,6 +48,7 @@ export class ExecutionRepository {
         status,
         currentState,
         input.failureReason ?? null,
+        input.batchExecutionId ?? null,
       ]
     );
 
@@ -55,6 +58,7 @@ export class ExecutionRepository {
       issueId: input.issueId,
       epicId: input.epicId,
       projectKey: input.projectKey,
+      batchExecutionId: input.batchExecutionId,
       status,
       currentState,
     };
