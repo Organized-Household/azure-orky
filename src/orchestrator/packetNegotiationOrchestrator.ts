@@ -1,11 +1,15 @@
 import { InstructionPacket } from '../domain/instructionPacket';
 import { AuditLogger } from '../audit/auditLogger';
-import { PacketReviewer } from '../integrations/review/packetReviewer';
+import { PacketReviewer, PacketReviewResult } from '../integrations/review/packetReviewer';
 import { PacketNegotiationRepository } from '../db/repositories/packetNegotiationRepository';
 import { ExecutionRepository } from '../db/repositories/executionRepository';
 import { CompilationChecker } from '../integrations/typescript/compilationChecker';
 
 const MAX_ROUNDS = parseInt(process.env.NEGOTIATION_MAX_ROUNDS ?? '5', 10);
+
+const PROTECTED_FILES = [
+  'src/db/repositories/executionRepository.ts',
+];
 
 export interface NegotiationResult {
   approved: boolean;
@@ -57,30 +61,54 @@ export class PacketNegotiationOrchestrator {
         message: `Starting review round ${roundNumber}/${MAX_ROUNDS}`,
       });
 
-      // --- TypeScript compilation check ---
-      const compilationErrors = await this.compilationChecker.check(
-        currentPacket.fileOperations,
+      // --- Protected file guard ---
+      const forbiddenOp = currentPacket.fileOperations.find((op) =>
+        PROTECTED_FILES.includes(op.path),
       );
 
-      if (compilationErrors.length > 0) {
+      let compilationErrors: string[] = [];
+      let reviewResult: PacketReviewResult;
+
+      if (forbiddenOp) {
         await this.auditLogger.log({
           executionId,
           storyId,
-          step: 'negotiation_compilation_failed',
+          step: 'negotiation_protected_file_violation',
           state: 'NEGOTIATING',
           status: 'warn',
-          message: `Round ${roundNumber}: ${compilationErrors.length} new TypeScript error(s)`,
-          metadata: { compilationErrors },
+          message: `Round ${roundNumber}: DIP attempts to ${forbiddenOp.operation} protected file — ${forbiddenOp.path}`,
+          metadata: { forbiddenPath: forbiddenOp.path, operation: forbiddenOp.operation },
         });
-      }
+        reviewResult = {
+          verdict: 'QUESTIONS',
+          issues: [
+            `DIP attempts to ${forbiddenOp.operation} src/db/repositories/executionRepository.ts — this file is protected and must never be modified. Remove this fileOperation entirely. Existing method names (updateState, getById, failIfNotTerminal, acquireLock, releaseLock, hasActiveOrCompletedExecution) are immutable — never rename them.`,
+          ],
+        };
+      } else {
+        // --- TypeScript compilation check ---
+        compilationErrors = await this.compilationChecker.check(currentPacket.fileOperations);
 
-      // --- Semantic review ---
-      const reviewResult = await this.reviewer.review(
-        executionId,
-        storyId,
-        currentPacket,
-        codebaseSnapshot,
-      );
+        if (compilationErrors.length > 0) {
+          await this.auditLogger.log({
+            executionId,
+            storyId,
+            step: 'negotiation_compilation_failed',
+            state: 'NEGOTIATING',
+            status: 'warn',
+            message: `Round ${roundNumber}: ${compilationErrors.length} new TypeScript error(s)`,
+            metadata: { compilationErrors },
+          });
+        }
+
+        // --- Semantic review ---
+        reviewResult = await this.reviewer.review(
+          executionId,
+          storyId,
+          currentPacket,
+          codebaseSnapshot,
+        );
+      }
 
       // --- Combine all issues ---
       const allIssues = [
