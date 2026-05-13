@@ -66,22 +66,21 @@ export const epicFileMap: Record<string, string[]> = {
     'src/db/repositories/instructionPacketRepository.ts',
   ],
   'EPIC-11': [
-    'src/orchestrator/batchOrchestrator.ts',
-    'src/orchestrator/batchCollector.ts',
-    'src/integrations/forge/forgePlannerClient.ts',
-    'src/integrations/forge/batchedForgeClient.ts',
-    'src/db/repositories/executionRepository.ts',
-    'src/db/repositories/batchExecutionRepository.ts',
-    'src/agents/repositoryMutationExecutor.ts',
-    'src/integrations/github/prOrchestrator.ts',
-    'src/domain/storyPayload.ts',
-    'src/audit/auditLogger.ts',
-    // Orchestration layer — shows existing call patterns
-    'src/orchestrator/batchOrchestrator.ts',
-    'src/orchestrator/batchCollector.ts',
+    // Signature-critical files first — Forge must see these to generate correct types
+    'src/db/repositories/batchExecutionRepository.ts',   // 2.6k
+    'src/integrations/jira/storyRetrievalService.ts',    // 6k  — retrieveStory() signature
+    'src/db/repositories/executionRepository.ts',         // 5.1k
+    'src/integrations/forge/forgePlannerClient.ts',       // 5.7k
+    'src/domain/storyPayload.ts',                         // 1.2k
+    'src/audit/auditLogger.ts',                           // 1.4k
+    // Orchestration layer — cumulative ~22k here, all fit under 40k budget
+    'src/orchestrator/batchOrchestrator.ts',              // 4.4k
+    'src/orchestrator/batchCollector.ts',                 // 5.1k
+    // Large/secondary files — truncated or skipped if budget runs out
     'src/orchestrator/forgeOrchestrator.ts',
     'src/webhooks/jiraWebhookController.ts',
-    // Large files last — will be truncated or skipped if budget runs out
+    'src/agents/repositoryMutationExecutor.ts',
+    'src/integrations/github/prOrchestrator.ts',
     'src/orchestrator/executionFactory.ts',
     'src/integrations/forge/forgeClient.ts',
   ],
