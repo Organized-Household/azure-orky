@@ -86,7 +86,9 @@ export class ForgeOrchestrator {
     let snapshotFiles: Array<{ path: string; content: string }> = [];
     try {
       const snapshotFetcher = new CodebaseSnapshotFetcher();
-      const snapshot = await snapshotFetcher.fetchForEpic(epicId);
+      // Pass packet.fileOperations so the fetcher can build the snapshot
+      // dynamically from the DIP's actual import graph (EPIC-12).
+      const snapshot = await snapshotFetcher.fetchForEpic(epicId, packet.fileOperations);
       snapshotFiles = snapshot.files;
       if (snapshot.files.length > 0) {
         codebaseSnapshot = snapshot.files

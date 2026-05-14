@@ -1,5 +1,7 @@
 import { createOctokit } from './githubClient';
 import { epicFileMap, SNAPSHOT_CHAR_LIMIT } from '../../config/contextConfig';
+import { FileOperation } from '../../domain/instructionPacket';
+import { RuntimeSnapshotBuilder } from '../snapshot/runtimeSnapshotBuilder';
 
 export interface SnapshotFile {
   path: string;
@@ -26,13 +28,39 @@ export class CodebaseSnapshotFetcher {
 
   /**
    * Fetches source files for the given epic from GitHub Contents API.
+   *
+   * When fileOperations are provided (non-empty), uses RuntimeSnapshotBuilder
+   * to derive the file list dynamically from the DIP's import graph.
+   * Falls back to the static epicFileMap when fileOperations are absent or
+   * yield no paths.
+   *
    * Non-fatal: if the entire fetch fails, returns an empty snapshot with a warning.
    * Files that do not exist on the branch are skipped with a warning, not a fatal error.
    * Total content is capped at SNAPSHOT_CHAR_LIMIT characters.
    */
-  async fetchForEpic(epicId: string, ref: string = 'dev'): Promise<CodebaseSnapshot> {
-    const filePaths = epicFileMap[epicId] ?? [];
+  async fetchForEpic(
+    epicId: string,
+    fileOperations?: FileOperation[],
+    ref: string = 'dev',
+  ): Promise<CodebaseSnapshot> {
     const warnings: string[] = [];
+    let filePaths: string[];
+
+    if (fileOperations && fileOperations.length > 0) {
+      const builder = new RuntimeSnapshotBuilder();
+      const result = await builder.buildFileList(fileOperations);
+      warnings.push(...result.warnings);
+      filePaths = result.filePaths;
+
+      if (filePaths.length === 0) {
+        warnings.push(
+          `RuntimeSnapshotBuilder returned no paths for epic ${epicId} — falling back to epicFileMap`,
+        );
+        filePaths = epicFileMap[epicId] ?? [];
+      }
+    } else {
+      filePaths = epicFileMap[epicId] ?? [];
+    }
 
     if (filePaths.length === 0) {
       warnings.push(`No file map configured for epic ${epicId} — snapshot skipped`);
