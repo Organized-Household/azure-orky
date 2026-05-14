@@ -84,6 +84,10 @@ export const epicFileMap: Record<string, string[]> = {
     'src/orchestrator/executionFactory.ts',
     'src/integrations/forge/forgeClient.ts',
   ],
+  'EPIC-13': [
+    'src/integrations/forge/forgeConstraints.ts',
+    'src/integrations/forge/forgeClient.ts',
+  ],
 };
 
 /** Maximum total character budget for injected codebase snapshot */
