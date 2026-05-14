@@ -1,5 +1,5 @@
 import { createOctokit } from './githubClient';
-import { epicFileMap, SNAPSHOT_CHAR_LIMIT } from '../../config/contextConfig';
+import { SNAPSHOT_CHAR_LIMIT } from '../../config/contextConfig';
 import { FileOperation } from '../../domain/instructionPacket';
 import { RuntimeSnapshotBuilder } from '../snapshot/runtimeSnapshotBuilder';
 import { SnapshotBudgetManager } from '../snapshot/snapshotBudgetManager';
@@ -30,10 +30,9 @@ export class CodebaseSnapshotFetcher {
   /**
    * Fetches source files for the given epic from GitHub Contents API.
    *
-   * When fileOperations are provided (non-empty), uses RuntimeSnapshotBuilder
-   * to derive the file list dynamically from the DIP's import graph.
-   * Falls back to the static epicFileMap when fileOperations are absent or
-   * yield no paths.
+   * fileOperations must be provided: RuntimeSnapshotBuilder derives the file
+   * list dynamically from the DIP's import graph. Returns an empty snapshot
+   * (with a warning) when fileOperations are absent or yield no paths.
    *
    * Non-fatal: if the entire fetch fails, returns an empty snapshot with a warning.
    * Files that do not exist on the branch are skipped with a warning, not a fatal error.
@@ -52,19 +51,14 @@ export class CodebaseSnapshotFetcher {
       const result = await builder.buildFileList(fileOperations);
       warnings.push(...result.warnings);
       filePaths = result.filePaths;
-
-      if (filePaths.length === 0) {
-        warnings.push(
-          `RuntimeSnapshotBuilder returned no paths for epic ${epicId} — falling back to epicFileMap`,
-        );
-        filePaths = epicFileMap[epicId] ?? [];
-      }
     } else {
-      filePaths = epicFileMap[epicId] ?? [];
+      filePaths = [];
     }
 
     if (filePaths.length === 0) {
-      warnings.push(`No file map configured for epic ${epicId} — snapshot skipped`);
+      warnings.push(
+        `No runtime file paths resolved for epic ${epicId} — snapshot skipped (fileOperations: ${fileOperations?.length ?? 0})`,
+      );
       return { files: [], totalChars: 0, warnings };
     }
 
