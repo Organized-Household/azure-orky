@@ -11,6 +11,9 @@ const PROTECTED_FILES = [
   'src/db/repositories/executionRepository.ts',
 ];
 
+// Matches file paths like src/foo/bar.ts in compilation error messages
+const FILE_PATH_PATTERN = /\bsrc\/[\w/.-]+\.ts\b/g;
+
 export interface NegotiationResult {
   approved: boolean;
   finalPacket: InstructionPacket;
@@ -33,7 +36,8 @@ export class PacketNegotiationOrchestrator {
     storyId: string,
     initialPacket: InstructionPacket,
     codebaseSnapshot: string,
-    forgeRevise: (issues: string[], currentPacket: InstructionPacket) => Promise<InstructionPacket>,
+    forgeRevise: (issues: string[], currentPacket: InstructionPacket, contextFiles?: Record<string, string>) => Promise<InstructionPacket>,
+    snapshotFiles?: Array<{ path: string; content: string }>,
   ): Promise<NegotiationResult> {
     await this.executionRepository.updateState(executionId, 'NEGOTIATING');
 
@@ -46,8 +50,11 @@ export class PacketNegotiationOrchestrator {
       message: `Starting packet negotiation loop (max ${MAX_ROUNDS} rounds)`,
     });
 
+    const snapshotMap = new Map((snapshotFiles ?? []).map((f) => [f.path, f.content]));
+
     let currentPacket = initialPacket;
     let roundNumber = 0;
+    let previousRoundIssues: string[] = [];
 
     while (roundNumber < MAX_ROUNDS) {
       roundNumber += 1;
@@ -158,16 +165,55 @@ export class PacketNegotiationOrchestrator {
         break;
       }
 
+      // --- Build context files for revision (ORKY-61) ---
+      const contextFiles: Record<string, string> = {};
+
+      // Extract file paths from compilation error messages
+      for (const err of compilationErrors) {
+        const matches = err.match(FILE_PATH_PATTERN) ?? [];
+        for (const filePath of matches) {
+          const content = snapshotMap.get(filePath);
+          if (content && !contextFiles[filePath]) {
+            contextFiles[filePath] = content.slice(0, 3_000);
+          }
+        }
+      }
+
+      // If any errors repeat from the previous round, broaden context to
+      // include files referenced in the DIP's own fileOperations
+      const hasRepeatingErrors = previousRoundIssues.some((prev) => allIssues.includes(prev));
+      if (hasRepeatingErrors) {
+        for (const op of currentPacket.fileOperations) {
+          const content = snapshotMap.get(op.path);
+          if (content && !contextFiles[op.path]) {
+            contextFiles[op.path] = content.slice(0, 3_000);
+          }
+        }
+      }
+
+      previousRoundIssues = allIssues;
+
+      const contextFileCount = Object.keys(contextFiles).length;
+
       await this.auditLogger.log({
         executionId,
         storyId,
         step: 'negotiation_requesting_revision',
         state: 'NEGOTIATING',
         status: 'info',
-        message: `Requesting Forge revision for round ${roundNumber + 1} with ${allIssues.length} issue(s)`,
+        message: `Requesting Forge revision for round ${roundNumber + 1} with ${allIssues.length} issue(s) and ${contextFileCount} context file(s)`,
+        metadata: {
+          contextFileCount,
+          contextFilePaths: Object.keys(contextFiles),
+          hasRepeatingErrors,
+        },
       });
 
-      currentPacket = await forgeRevise(allIssues, currentPacket);
+      currentPacket = await forgeRevise(
+        allIssues,
+        currentPacket,
+        contextFileCount > 0 ? contextFiles : undefined,
+      );
     }
 
     // MAX_ROUNDS exhausted without approval

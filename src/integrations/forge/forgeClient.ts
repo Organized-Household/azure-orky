@@ -10,7 +10,7 @@ import { InstructionPacket } from '../../domain/instructionPacket';
 import { ProjectContextRepository } from '../../db/repositories/projectContextRepository';
 import { DecisionLogRepository } from '../../db/repositories/decisionLogRepository';
 import { CodebaseSnapshotFetcher } from '../github/codebaseSnapshotFetcher';
-import { buildConstraintBlock } from './forgeConstraints';
+import { buildConstraintBlock, FORGE_PROMPT_VERSION } from './forgeConstraints';
 
 export class ForgeInvocationError extends Error {
   constructor(
@@ -59,6 +59,8 @@ export class ForgeClient {
   private readonly timeoutMs = 120_000;
   private readonly maxRetries = 3;
   private readonly backoffMs = [65_000, 120_000, 240_000];
+
+  readonly promptVersion = FORGE_PROMPT_VERSION;
 
   constructor() {
     this.client = new Anthropic({
@@ -123,7 +125,7 @@ export class ForgeClient {
     );
   }
 
-  async revise(storyPayload: StoryPayload, issues: string[], currentPacket: InstructionPacket): Promise<InstructionPacket> {
+  async revise(storyPayload: StoryPayload, issues: string[], currentPacket: InstructionPacket, contextFiles?: Record<string, string>): Promise<InstructionPacket> {
     // Revision prompt is intentionally slim — omits PDE artifacts, history, and codebase snapshot
     // (Forge already saw those in round 1). Only send what's needed to fix the specific errors.
     let migrationInventory = '';
@@ -171,7 +173,13 @@ ID: ${storyPayload.storyId} — ${storyPayload.title}
 ## Existing Migrations
 ${migrationInventory}
 
-## Your Previous DIP File Operations (fix the errors in these)
+${contextFiles && Object.keys(contextFiles).length > 0
+  ? `## Relevant Source Files (actual interfaces — use these, do not invent)\n\n${
+      Object.entries(contextFiles)
+        .map(([p, c]) => `#### \`${p}\`\n\`\`\`typescript\n${c}\n\`\`\``)
+        .join('\n\n')
+    }\n\n`
+  : ''}## Your Previous DIP File Operations (fix the errors in these)
 
 ${currentFilesSection || '_(no file content available)_'}
 

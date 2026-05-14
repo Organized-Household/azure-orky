@@ -42,6 +42,7 @@ export class ForgeOrchestrator {
       state: EXECUTION_STATES.FORGE_INVOKED,
       status: 'started',
       message: 'Invoking Forge to generate instruction packet',
+      metadata: { forgePromptVersion: this.forgeClient.promptVersion },
     });
 
     let packet: InstructionPacket;
@@ -82,9 +83,11 @@ export class ForgeOrchestrator {
     const epicId = storyPayload.PDEEpicID ?? storyPayload.epicId ?? '';
 
     let codebaseSnapshot = '';
+    let snapshotFiles: Array<{ path: string; content: string }> = [];
     try {
       const snapshotFetcher = new CodebaseSnapshotFetcher();
       const snapshot = await snapshotFetcher.fetchForEpic(epicId);
+      snapshotFiles = snapshot.files;
       if (snapshot.files.length > 0) {
         codebaseSnapshot = snapshot.files
           .map((f) => `#### \`${f.path}\`\n\`\`\`typescript\n${f.content}\n\`\`\``)
@@ -111,8 +114,8 @@ export class ForgeOrchestrator {
       this.auditLogger,
     );
 
-    const forgeRevise = async (issues: string[], currentPacket: InstructionPacket): Promise<InstructionPacket> => {
-      return this.forgeClient.revise(storyPayload, issues, currentPacket);
+    const forgeRevise = async (issues: string[], currentPacket: InstructionPacket, contextFiles?: Record<string, string>): Promise<InstructionPacket> => {
+      return this.forgeClient.revise(storyPayload, issues, currentPacket, contextFiles);
     };
 
     const negotiationResult = await negotiationOrchestrator.negotiate(
@@ -121,6 +124,7 @@ export class ForgeOrchestrator {
       packet,
       codebaseSnapshot,
       forgeRevise,
+      snapshotFiles,
     );
 
     if (!negotiationResult.approved) {

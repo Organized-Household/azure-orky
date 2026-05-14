@@ -1,4 +1,10 @@
 /**
+ * Incremented whenever constraints are added or the prompt structure changes.
+ * Persisted in instruction_packets.forge_prompt_version for success-rate analysis.
+ */
+export const FORGE_PROMPT_VERSION = '1.1.0';
+
+/**
  * Forge Constraint Library
  * 
  * Documents known Forge mistake patterns and their correct counterparts.
