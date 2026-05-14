@@ -2,6 +2,7 @@ import { createOctokit } from './githubClient';
 import { epicFileMap, SNAPSHOT_CHAR_LIMIT } from '../../config/contextConfig';
 import { FileOperation } from '../../domain/instructionPacket';
 import { RuntimeSnapshotBuilder } from '../snapshot/runtimeSnapshotBuilder';
+import { SnapshotBudgetManager } from '../snapshot/snapshotBudgetManager';
 
 export interface SnapshotFile {
   path: string;
@@ -68,15 +69,10 @@ export class CodebaseSnapshotFetcher {
     }
 
     const octokit = createOctokit();
-    const files: SnapshotFile[] = [];
-    let totalChars = 0;
+    const rawFiles: Array<{ path: string; content: string }> = [];
 
+    // Fetch raw content for all candidate files (no truncation yet)
     for (const filePath of filePaths) {
-      if (totalChars >= SNAPSHOT_CHAR_LIMIT) {
-        warnings.push(`Character budget exhausted — skipping ${filePath}`);
-        continue;
-      }
-
       try {
         const response = await octokit.repos.getContent({
           owner: this.owner,
@@ -92,12 +88,7 @@ export class CodebaseSnapshotFetcher {
         }
 
         const raw = Buffer.from(data.content, 'base64').toString('utf-8');
-        const remaining = SNAPSHOT_CHAR_LIMIT - totalChars;
-        const truncated = raw.length > remaining;
-        const content = truncated ? raw.slice(0, remaining) + '\n// [truncated]' : raw;
-
-        files.push({ path: filePath, content, truncated });
-        totalChars += content.length;
+        rawFiles.push({ path: filePath, content: raw });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
@@ -107,6 +98,17 @@ export class CodebaseSnapshotFetcher {
         }
       }
     }
+
+    // Apply smart budget allocation (interfaces first, implementations second)
+    const budgetManager = new SnapshotBudgetManager();
+    const allocated = budgetManager.allocate(rawFiles, SNAPSHOT_CHAR_LIMIT);
+
+    const files: SnapshotFile[] = allocated.map((f) => ({
+      path: f.path,
+      content: f.content,
+      truncated: f.truncated,
+    }));
+    const totalChars = files.reduce((sum, f) => sum + f.content.length, 0);
 
     return { files, totalChars, warnings };
   }
