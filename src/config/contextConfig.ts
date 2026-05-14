@@ -87,6 +87,7 @@ export const epicFileMap: Record<string, string[]> = {
   'EPIC-13': [
     'src/integrations/forge/forgeConstraints.ts',
     'src/integrations/forge/forgeClient.ts',
+    'src/orchestrator/packetNegotiationOrchestrator.ts',
   ],
 };
 
