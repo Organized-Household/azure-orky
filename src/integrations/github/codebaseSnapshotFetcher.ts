@@ -40,13 +40,13 @@ export class CodebaseSnapshotFetcher {
    */
   async fetchForEpic(
     epicId: string,
-    fileOperations?: FileOperation[],
+    fileOperations: FileOperation[],
     ref: string = 'dev',
   ): Promise<CodebaseSnapshot> {
     const warnings: string[] = [];
     let filePaths: string[];
 
-    if (fileOperations && fileOperations.length > 0) {
+    if (fileOperations.length > 0) {
       const builder = new RuntimeSnapshotBuilder();
       const result = await builder.buildFileList(fileOperations);
       warnings.push(...result.warnings);
@@ -57,7 +57,7 @@ export class CodebaseSnapshotFetcher {
 
     if (filePaths.length === 0) {
       warnings.push(
-        `No runtime file paths resolved for epic ${epicId} — snapshot skipped (fileOperations: ${fileOperations?.length ?? 0})`,
+        `No runtime file paths resolved for epic ${epicId} — snapshot skipped (fileOperations: ${fileOperations.length})`,
       );
       return { files: [], totalChars: 0, warnings };
     }
