@@ -1,8 +1,17 @@
 import { IncomingMessage, ServerResponse } from "http";
 import { ExecutionFactory } from "../orchestrator/executionFactory";
 import { validateJiraWebhookPayload } from "./jiraWebhookValidator";
+import { BatchCollector } from "../orchestrator/batchCollector";
+import { BatchExecutionRepository } from "../db/repositories/batchExecutionRepository";
+import { AuditLogger } from "../audit/auditLogger";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+
+// Module-level singleton: windows Map must survive across requests to accumulate stories
+const batchCollector = new BatchCollector(
+  new BatchExecutionRepository(),
+  new AuditLogger(),
+);
 
 export async function handleJiraWebhook(
   req: IncomingMessage,
@@ -55,26 +64,18 @@ export async function handleJiraWebhook(
     return;
   }
 
-  // Happy path: valid triggering event with all required fields
+  // Happy path: valid triggering event — queue story in batch collection window
   try {
-    const result = await executionFactory.createValidatedExecution(validation);
+    const storyId = validation.storyId!;
+    const epicId = validation.epicId!;
+    const projectKey = validation.projectKey!;
 
-    // Idempotency: prior execution already exists — return 200 silently
-    if ('ignored' in result && result.ignored === true) {
-      sendJson(res, 200, {
-        received: true,
-        ignored: true,
-        reason: result.reason,
-        storyId: result.storyId,
-      });
-      return;
-    }
+    await batchCollector.collectStory(storyId, epicId, projectKey);
 
     sendJson(res, 200, {
-      received: result.received,
-      executionId: (result as import('../orchestrator/executionFactory').IntakeSuccess).executionId,
-      storyId: result.storyId,
-      status: (result as import('../orchestrator/executionFactory').IntakeSuccess).status,
+      received: true,
+      storyId,
+      queued: true,
     });
   } catch (error) {
     const detail = getSafeProcessingFailureDetail(error);
