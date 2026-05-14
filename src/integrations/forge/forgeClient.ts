@@ -312,7 +312,7 @@ Schema:
     let codebaseSnapshot = '';
     try {
       const fetcher = new CodebaseSnapshotFetcher();
-      const snapshot = await fetcher.fetchForEpic(epicId);
+      const snapshot = await fetcher.fetchForEpic(epicId, []);
       if (snapshot.files.length > 0) {
         codebaseSnapshot = snapshot.files
           .map(
