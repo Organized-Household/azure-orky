@@ -28,6 +28,7 @@ export class BatchCollector {
   }
 
   async collectStory(storyId: string, epicId: string, projectKey: string): Promise<void> {
+    console.log(`[BatchCollector] collectStory called — storyId: ${storyId}, epicId: "${epicId}", projectKey: ${projectKey}`);
     const existingWindow = this.windows.get(epicId);
 
     if (existingWindow) {
