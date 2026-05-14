@@ -10,6 +10,7 @@ import { InstructionPacket } from '../../domain/instructionPacket';
 import { ProjectContextRepository } from '../../db/repositories/projectContextRepository';
 import { DecisionLogRepository } from '../../db/repositories/decisionLogRepository';
 import { CodebaseSnapshotFetcher } from '../github/codebaseSnapshotFetcher';
+import { buildConstraintBlock } from './forgeConstraints';
 
 export class ForgeInvocationError extends Error {
   constructor(
@@ -194,7 +195,7 @@ Schema:
   "commitMessage": "<conventional commit>",
   "implementationSummary": "<summary>",
   "jiraLinkage": "${storyPayload.jiraIssueKey ?? storyPayload.storyId}"
-}`;
+}` + '\n\n' + buildConstraintBlock();
 
     let lastError: unknown;
 
@@ -470,6 +471,6 @@ Schema:
   "commitMessage": "<conventional commit: feat(storyId): description>",
   "implementationSummary": "<human-readable summary of what was built and why, for the decision log>",
   "jiraLinkage": "${storyPayload.jiraIssueKey ?? storyPayload.storyId}"
-}`;
+}` + '\n\n' + buildConstraintBlock();
   }
 }
