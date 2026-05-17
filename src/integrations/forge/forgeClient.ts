@@ -1,8 +1,4 @@
-import Anthropic, {
-  APIConnectionTimeoutError,
-  APIError,
-  InternalServerError,
-} from '@anthropic-ai/sdk';
+import Anthropic from '@anthropic-ai/sdk';
 import * as fs from 'fs';
 import * as path from 'path';
 import { StoryPayload } from '../../domain/storyPayload';
@@ -11,6 +7,8 @@ import { ProjectContextRepository } from '../../db/repositories/projectContextRe
 import { DecisionLogRepository } from '../../db/repositories/decisionLogRepository';
 import { CodebaseSnapshotFetcher } from '../github/codebaseSnapshotFetcher';
 import { buildConstraintBlock, FORGE_PROMPT_VERSION } from './forgeConstraints';
+import { AuditLogger } from '../../audit/auditLogger';
+import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
 
 export class ForgeInvocationError extends Error {
   constructor(
@@ -21,19 +19,6 @@ export class ForgeInvocationError extends Error {
     super(message);
     this.name = 'ForgeInvocationError';
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRetryable(error: unknown): boolean {
-  return (
-    error instanceof APIConnectionTimeoutError ||
-    error instanceof InternalServerError ||
-    (error instanceof APIError && error.status >= 500) ||
-    (error instanceof APIError && error.status === 429)
-  );
 }
 
 function stripMarkdownFences(text: string): string {
@@ -55,77 +40,86 @@ function extractJsonObject(text: string): string {
 }
 
 export class ForgeClient {
-  private client: Anthropic;
-  private readonly timeoutMs = 120_000;
-  private readonly maxRetries = 3;
-  private readonly backoffMs = [65_000, 120_000, 240_000];
+  private retryClient: AnthropicRetryClient;
+  private auditLogger: AuditLogger;
 
   readonly promptVersion = FORGE_PROMPT_VERSION;
 
-  constructor() {
-    this.client = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      maxRetries: 0,
-    });
+  constructor(auditLogger: AuditLogger) {
+    this.retryClient = new AnthropicRetryClient();
+    this.auditLogger = auditLogger;
   }
 
-  async generateInstructionPacket(storyPayload: StoryPayload): Promise<InstructionPacket> {
+  async generateInstructionPacket(
+    executionId: string,
+    storyId: string,
+    storyPayload: StoryPayload,
+  ): Promise<InstructionPacket> {
     const context = await this.assembleContext(storyPayload);
     const prompt = this.buildPrompt(storyPayload, context);
-    let lastError: unknown;
 
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
-      if (attempt > 0) {
-        await sleep(this.backoffMs[attempt - 1]);
-      }
-
-      try {
-        const response = await this.client.messages.create(
-          {
-            model: 'claude-sonnet-4-5',
-            max_tokens: 16000,
-            messages: [{ role: 'user', content: prompt }],
-          },
-          { timeout: this.timeoutMs },
-        );
-
-        const block = response.content[0];
-        const text = block.type === 'text' ? block.text : '';
-        const cleaned = stripMarkdownFences(text);
-
-        console.log('[ForgeClient] Raw response length:', text.length);
-        console.log('[ForgeClient] Cleaned response preview:', cleaned.slice(0, 200));
-
-        try {
-          return JSON.parse(cleaned) as InstructionPacket;
-        } catch {
-          throw new ForgeInvocationError(
-            'FORGE_PARSE_ERROR',
-            `Forge response is not valid JSON: ${cleaned.slice(0, 300)}`,
+    let response: Anthropic.Message;
+    try {
+      response = await this.retryClient.createMessage(
+        {
+          model: 'claude-sonnet-4-5',
+          max_tokens: 16000,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        async (retryInfo) => {
+          console.log(
+            `[ForgeClient] Retry attempt ${retryInfo.attempt}/${retryInfo.maxRetries} — waiting ${retryInfo.waitMs}ms. Reason: ${retryInfo.errorMessage}`,
           );
-        }
-      } catch (error) {
-        if (error instanceof ForgeInvocationError) throw error;
-        if (isRetryable(error)) { lastError = error; continue; }
-        throw new ForgeInvocationError(
-          'FORGE_HTTP_ERROR',
-          `Forge request failed: ${error instanceof Error ? error.message : String(error)}`,
-          error,
-        );
+          await this.auditLogger.log({
+            executionId,
+            storyId,
+            step: 'api_retry',
+            state: 'forge_invoked',
+            status: 'retrying',
+            message: `Anthropic API retry — attempt ${retryInfo.attempt} of ${retryInfo.maxRetries}, waiting ${retryInfo.waitMs}ms`,
+            metadata: {
+              attempt: retryInfo.attempt,
+              maxRetries: retryInfo.maxRetries,
+              waitMs: retryInfo.waitMs,
+              errorMessage: retryInfo.errorMessage,
+            },
+          });
+        },
+      );
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      let code: 'FORGE_TIMEOUT' | 'FORGE_HTTP_ERROR' = 'FORGE_HTTP_ERROR';
+      if (err instanceof AnthropicRetryExhaustedError && err.code === 'TIMEOUT') {
+        code = 'FORGE_TIMEOUT';
       }
+      throw new ForgeInvocationError(code, error.message, err);
     }
 
-    const isTimeout = lastError instanceof APIConnectionTimeoutError;
-    throw new ForgeInvocationError(
-      isTimeout ? 'FORGE_TIMEOUT' : 'FORGE_HTTP_ERROR',
-      isTimeout
-        ? 'Forge request timed out after all retries'
-        : `Forge request failed after all retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
-      lastError,
-    );
+    const block = response.content[0];
+    const text = block.type === 'text' ? block.text : '';
+    const cleaned = stripMarkdownFences(text);
+
+    console.log('[ForgeClient] Raw response length:', text.length);
+    console.log('[ForgeClient] Cleaned response preview:', cleaned.slice(0, 200));
+
+    try {
+      return JSON.parse(cleaned) as InstructionPacket;
+    } catch {
+      throw new ForgeInvocationError(
+        'FORGE_PARSE_ERROR',
+        `Forge response is not valid JSON: ${cleaned.slice(0, 300)}`,
+      );
+    }
   }
 
-  async revise(storyPayload: StoryPayload, issues: string[], currentPacket: InstructionPacket, contextFiles?: Record<string, string>): Promise<InstructionPacket> {
+  async revise(
+    executionId: string,
+    storyId: string,
+    storyPayload: StoryPayload,
+    issues: string[],
+    currentPacket: InstructionPacket,
+    contextFiles?: Record<string, string>,
+  ): Promise<InstructionPacket> {
     // Revision prompt is intentionally slim — omits PDE artifacts, history, and codebase snapshot
     // (Forge already saw those in round 1). Only send what's needed to fix the specific errors.
     let migrationInventory = '';
@@ -205,54 +199,55 @@ Schema:
   "jiraLinkage": "${storyPayload.jiraIssueKey ?? storyPayload.storyId}"
 }` + '\n\n' + buildConstraintBlock();
 
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
-      if (attempt > 0) {
-        await sleep(this.backoffMs[attempt - 1]);
-      }
-
-      try {
-        const response = await this.client.messages.create(
-          {
-            model: 'claude-sonnet-4-5',
-            max_tokens: 16000,
-            messages: [{ role: 'user', content: prompt }],
-          },
-          { timeout: this.timeoutMs },
-        );
-
-        const block = response.content[0];
-        const text = block.type === 'text' ? block.text : '';
-        const cleaned = extractJsonObject(stripMarkdownFences(text));
-
-        try {
-          return JSON.parse(cleaned) as InstructionPacket;
-        } catch {
-          throw new ForgeInvocationError(
-            'FORGE_PARSE_ERROR',
-            `Forge revision response is not valid JSON: ${cleaned.slice(0, 300)}`,
+    let response: Anthropic.Message;
+    try {
+      response = await this.retryClient.createMessage(
+        {
+          model: 'claude-sonnet-4-5',
+          max_tokens: 16000,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        async (retryInfo) => {
+          console.log(
+            `[ForgeClient] Retry attempt ${retryInfo.attempt}/${retryInfo.maxRetries} — waiting ${retryInfo.waitMs}ms. Reason: ${retryInfo.errorMessage}`,
           );
-        }
-      } catch (error) {
-        if (error instanceof ForgeInvocationError) throw error;
-        if (isRetryable(error)) { lastError = error; continue; }
-        throw new ForgeInvocationError(
-          'FORGE_HTTP_ERROR',
-          `Forge revision request failed: ${error instanceof Error ? error.message : String(error)}`,
-          error,
-        );
+          await this.auditLogger.log({
+            executionId,
+            storyId,
+            step: 'api_retry',
+            state: 'forge_invoked',
+            status: 'retrying',
+            message: `Anthropic API retry — attempt ${retryInfo.attempt} of ${retryInfo.maxRetries}, waiting ${retryInfo.waitMs}ms`,
+            metadata: {
+              attempt: retryInfo.attempt,
+              maxRetries: retryInfo.maxRetries,
+              waitMs: retryInfo.waitMs,
+              errorMessage: retryInfo.errorMessage,
+            },
+          });
+        },
+      );
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      let code: 'FORGE_TIMEOUT' | 'FORGE_HTTP_ERROR' = 'FORGE_HTTP_ERROR';
+      if (err instanceof AnthropicRetryExhaustedError && err.code === 'TIMEOUT') {
+        code = 'FORGE_TIMEOUT';
       }
+      throw new ForgeInvocationError(code, error.message, err);
     }
 
-    const isTimeout = lastError instanceof APIConnectionTimeoutError;
-    throw new ForgeInvocationError(
-      isTimeout ? 'FORGE_TIMEOUT' : 'FORGE_HTTP_ERROR',
-      isTimeout
-        ? 'Forge revision request timed out after all retries'
-        : `Forge revision request failed after all retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
-      lastError,
-    );
+    const block = response.content[0];
+    const text = block.type === 'text' ? block.text : '';
+    const cleaned = extractJsonObject(stripMarkdownFences(text));
+
+    try {
+      return JSON.parse(cleaned) as InstructionPacket;
+    } catch {
+      throw new ForgeInvocationError(
+        'FORGE_PARSE_ERROR',
+        `Forge revision response is not valid JSON: ${cleaned.slice(0, 300)}`,
+      );
+    }
   }
 
   private async assembleContext(storyPayload: StoryPayload): Promise<{

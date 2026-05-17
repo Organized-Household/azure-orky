@@ -1,6 +1,6 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { InstructionPacket } from '../../domain/instructionPacket';
 import { AuditLogger } from '../../audit/auditLogger';
+import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
 
 export type ReviewVerdict = 'APPROVED' | 'QUESTIONS';
 
@@ -10,11 +10,11 @@ export interface PacketReviewResult {
 }
 
 export class PacketReviewer {
-  private client: Anthropic;
+  private retryClient: AnthropicRetryClient;
   private auditLogger: AuditLogger;
 
   constructor(auditLogger: AuditLogger) {
-    this.client = new Anthropic();
+    this.retryClient = new AnthropicRetryClient();
     this.auditLogger = auditLogger;
   }
 
@@ -37,11 +37,32 @@ export class PacketReviewer {
 
     let rawText: string;
     try {
-      const response = await this.client.messages.create({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }],
-      });
+      const response = await this.retryClient.createMessage(
+        {
+          model: 'claude-sonnet-4-5',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        async (retryInfo) => {
+          console.log(
+            `[PacketReviewer] Retry attempt ${retryInfo.attempt}/${retryInfo.maxRetries} — waiting ${retryInfo.waitMs}ms`,
+          );
+          await this.auditLogger.log({
+            executionId,
+            storyId,
+            step: 'api_retry',
+            state: 'negotiating',
+            status: 'retrying',
+            message: `Anthropic API retry — attempt ${retryInfo.attempt} of ${retryInfo.maxRetries}, waiting ${retryInfo.waitMs}ms`,
+            metadata: {
+              attempt: retryInfo.attempt,
+              maxRetries: retryInfo.maxRetries,
+              waitMs: retryInfo.waitMs,
+              errorMessage: retryInfo.errorMessage,
+            },
+          });
+        },
+      );
 
       const firstBlock = response.content[0];
       if (firstBlock.type !== 'text') {
@@ -49,6 +70,18 @@ export class PacketReviewer {
       }
       rawText = firstBlock.text;
     } catch (err: unknown) {
+      if (err instanceof AnthropicRetryExhaustedError) {
+        const message = err.message;
+        await this.auditLogger.log({
+          executionId,
+          storyId,
+          step: 'packet_review_failed',
+          state: 'NEGOTIATING',
+          status: 'error',
+          message: `Claude API call failed — ${message}`,
+        });
+        throw new Error(`PacketReviewer: Claude API call failed — ${message}`);
+      }
       const message = err instanceof Error ? err.message : String(err);
       await this.auditLogger.log({
         executionId,
