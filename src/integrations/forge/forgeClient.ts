@@ -10,6 +10,7 @@ import { buildConstraintBlock, FORGE_PROMPT_VERSION } from './forgeConstraints';
 import { AuditLogger } from '../../audit/auditLogger';
 import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
 import { TokenUsageRepository } from '../../db/repositories/tokenUsageRepository';
+import { CostGuard, CostGuardExceededError } from '../../orchestrator/costGuard';
 
 export class ForgeInvocationError extends Error {
   constructor(
@@ -44,6 +45,7 @@ export class ForgeClient {
   private retryClient: AnthropicRetryClient;
   private auditLogger: AuditLogger;
   private tokenUsageRepo: TokenUsageRepository;
+  private costGuard: CostGuard;
 
   readonly promptVersion = FORGE_PROMPT_VERSION;
 
@@ -51,6 +53,7 @@ export class ForgeClient {
     this.retryClient = new AnthropicRetryClient();
     this.auditLogger = auditLogger;
     this.tokenUsageRepo = new TokenUsageRepository();
+    this.costGuard = new CostGuard(this.tokenUsageRepo, this.auditLogger);
   }
 
   async generateInstructionPacket(
@@ -58,6 +61,8 @@ export class ForgeClient {
     storyId: string,
     storyPayload: StoryPayload,
   ): Promise<InstructionPacket> {
+    await this.costGuard.check(executionId, storyId);
+
     const context = await this.assembleContext(storyPayload);
     const prompt = this.buildPrompt(storyPayload, context);
 
@@ -130,6 +135,8 @@ export class ForgeClient {
     currentPacket: InstructionPacket,
     contextFiles?: Record<string, string>,
   ): Promise<InstructionPacket> {
+    await this.costGuard.check(executionId, storyId);
+
     // Revision prompt is intentionally slim — omits PDE artifacts, history, and codebase snapshot
     // (Forge already saw those in round 1). Only send what's needed to fix the specific errors.
     let migrationInventory = '';

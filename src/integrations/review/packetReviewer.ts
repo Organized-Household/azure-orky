@@ -2,6 +2,7 @@ import { InstructionPacket } from '../../domain/instructionPacket';
 import { AuditLogger } from '../../audit/auditLogger';
 import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
 import { TokenUsageRepository } from '../../db/repositories/tokenUsageRepository';
+import { CostGuard, CostGuardExceededError } from '../../orchestrator/costGuard';
 
 export type ReviewVerdict = 'APPROVED' | 'QUESTIONS';
 
@@ -14,11 +15,13 @@ export class PacketReviewer {
   private retryClient: AnthropicRetryClient;
   private auditLogger: AuditLogger;
   private tokenUsageRepo: TokenUsageRepository;
+  private costGuard: CostGuard;
 
   constructor(auditLogger: AuditLogger) {
     this.retryClient = new AnthropicRetryClient();
     this.auditLogger = auditLogger;
     this.tokenUsageRepo = new TokenUsageRepository();
+    this.costGuard = new CostGuard(this.tokenUsageRepo, this.auditLogger);
   }
 
   async review(
@@ -27,6 +30,8 @@ export class PacketReviewer {
     packet: InstructionPacket,
     codebaseSnapshot: string,
   ): Promise<PacketReviewResult> {
+    await this.costGuard.check(executionId, storyId);
+
     await this.auditLogger.log({
       executionId,
       storyId,
