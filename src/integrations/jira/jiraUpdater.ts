@@ -1,5 +1,6 @@
 import { JiraClient } from './jiraClient';
 import { AuditLogger } from '../../audit/auditLogger';
+import { TokenUsageRepository, estimateCostUsd } from '../../db/repositories/tokenUsageRepository';
 
 export interface JiraSuccessUpdateParams {
   executionId: string;
@@ -22,6 +23,20 @@ export class JiraUpdater {
   async reportSuccess(params: JiraSuccessUpdateParams): Promise<void> {
     const { executionId, storyId, issueKey, prUrl, mergeSha } = params;
 
+    // Fetch token usage for cost summary — best-effort, never throws
+    let costLine = '';
+    try {
+      const tokenRepo = new TokenUsageRepository();
+      const usage = await tokenRepo.sumByExecution(executionId);
+      if (usage.callCount > 0) {
+        const costUsd = estimateCostUsd(usage.inputTokens, usage.outputTokens);
+        costLine = `\nAPI usage: ~${usage.totalTokens} tokens (~$${costUsd.toFixed(2)} estimated)`;
+      }
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[JiraUpdater] Failed to fetch token usage for cost summary:', error.message);
+    }
+
     await this.jiraClient.addRemoteLink(issueKey, prUrl, 'Orky: Pull Request');
 
     await this.auditLogger.log({
@@ -36,7 +51,8 @@ export class JiraUpdater {
     const commentText =
       `Orky: Execution completed successfully.\n` +
       `Pull Request: ${prUrl}\n` +
-      `Merge SHA: ${mergeSha}`;
+      `Merge SHA: ${mergeSha}` +
+      costLine;
 
     await this.jiraClient.addComment(issueKey, commentText);
 
