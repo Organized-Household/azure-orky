@@ -47,7 +47,7 @@ export class ForgeOrchestrator {
 
     let packet: InstructionPacket;
     try {
-      packet = await this.forgeClient.generateInstructionPacket(storyPayload);
+      packet = await this.forgeClient.generateInstructionPacket(executionId, storyId, storyPayload);
     } catch (error) {
       const code = error instanceof ForgeInvocationError ? error.code : 'FORGE_HTTP_ERROR';
       const message = error instanceof Error ? error.message : String(error);
@@ -117,7 +117,7 @@ export class ForgeOrchestrator {
     );
 
     const forgeRevise = async (issues: string[], currentPacket: InstructionPacket, contextFiles?: Record<string, string>): Promise<InstructionPacket> => {
-      return this.forgeClient.revise(storyPayload, issues, currentPacket, contextFiles);
+      return this.forgeClient.revise(executionId, storyId, storyPayload, issues, currentPacket, contextFiles);
     };
 
     const negotiationResult = await negotiationOrchestrator.negotiate(

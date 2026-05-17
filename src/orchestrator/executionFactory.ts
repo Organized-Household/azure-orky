@@ -221,7 +221,7 @@ export class ExecutionFactory {
       });
 
       const forgeOrchestrator = new ForgeOrchestrator(
-        new ForgeClient(),
+        new ForgeClient(this.auditLogger),
         new InstructionValidator(),
         this.executionRepository,
         new InstructionPacketRepository(),
