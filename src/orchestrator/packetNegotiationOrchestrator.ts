@@ -5,8 +5,6 @@ import { PacketNegotiationRepository } from '../db/repositories/packetNegotiatio
 import { ExecutionRepository } from '../db/repositories/executionRepository';
 import { CompilationChecker } from '../integrations/typescript/compilationChecker';
 
-const MAX_ROUNDS = parseInt(process.env.NEGOTIATION_MAX_ROUNDS ?? '5', 10);
-
 const PROTECTED_FILES = [
   'src/db/repositories/executionRepository.ts',
 ];
@@ -39,15 +37,18 @@ export class PacketNegotiationOrchestrator {
     forgeRevise: (issues: string[], currentPacket: InstructionPacket, contextFiles?: Record<string, string>) => Promise<InstructionPacket>,
     snapshotFiles?: Array<{ path: string; content: string }>,
   ): Promise<NegotiationResult> {
+    // ORKY-66: resolved per-call so env changes take effect without restart
+    const maxRounds = parseInt(process.env.NEGOTIATION_MAX_ROUNDS ?? '3', 10);
+
     await this.executionRepository.updateState(executionId, 'NEGOTIATING');
 
     await this.auditLogger.log({
       executionId,
       storyId,
-      step: 'negotiation_started',
+      step: 'NEGOTIATION_START',
       state: 'NEGOTIATING',
       status: 'info',
-      message: `Starting packet negotiation loop (max ${MAX_ROUNDS} rounds)`,
+      message: `Negotiation starting. maxRounds=${maxRounds}`,
     });
 
     const snapshotMap = new Map((snapshotFiles ?? []).map((f) => [f.path, f.content]));
@@ -55,8 +56,9 @@ export class PacketNegotiationOrchestrator {
     let currentPacket = initialPacket;
     let roundNumber = 0;
     let previousRoundIssues: string[] = [];
+    let previousIssuesJson: string | null = null;
 
-    while (roundNumber < MAX_ROUNDS) {
+    while (roundNumber < maxRounds) {
       roundNumber += 1;
 
       await this.auditLogger.log({
@@ -65,7 +67,7 @@ export class PacketNegotiationOrchestrator {
         step: 'negotiation_round_started',
         state: 'NEGOTIATING',
         status: 'info',
-        message: `Starting review round ${roundNumber}/${MAX_ROUNDS}`,
+        message: `Starting review round ${roundNumber}/${maxRounds}`,
       });
 
       // --- Protected file guard ---
@@ -125,6 +127,39 @@ export class PacketNegotiationOrchestrator {
 
       const approved = compilationErrors.length === 0 && reviewResult.verdict === 'APPROVED';
 
+      // --- ORKY-63: Stall detection (before persisting round) ---
+      if (!approved) {
+        const currentIssuesJson = JSON.stringify(
+          [...(reviewResult.issues ?? [])].sort()
+        );
+
+        if (previousIssuesJson !== null && currentIssuesJson === previousIssuesJson) {
+          const stallReason =
+            `NEGOTIATION_STALL_DETECTED: identical issues returned in consecutive rounds ` +
+            `(round ${roundNumber - 1} and round ${roundNumber}). Issues: ${currentIssuesJson}`;
+
+          await this.auditLogger.log({
+            executionId,
+            storyId,
+            step: 'NEGOTIATION_STALL',
+            state: 'FAILED',
+            status: 'error',
+            message: stallReason,
+          });
+
+          await this.executionRepository.failIfNotTerminal(executionId, stallReason);
+
+          return {
+            approved: false,
+            finalPacket: currentPacket,
+            roundsCompleted: roundNumber,
+            diagnosticMessage: stallReason,
+          };
+        }
+
+        previousIssuesJson = currentIssuesJson;
+      }
+
       await this.negotiationRepository.saveRound(
         executionId,
         storyId,
@@ -161,7 +196,7 @@ export class PacketNegotiationOrchestrator {
         message: `Round ${roundNumber}: ${allIssues.length} issue(s) — ${compilationErrors.length} compile error(s), ${reviewResult.issues.length} reviewer issue(s)`,
       });
 
-      if (roundNumber === MAX_ROUNDS) {
+      if (roundNumber === maxRounds) {
         break;
       }
 
@@ -216,15 +251,16 @@ export class PacketNegotiationOrchestrator {
       );
     }
 
-    // MAX_ROUNDS exhausted without approval
+    // maxRounds exhausted without approval
     const allRounds = await this.negotiationRepository.getRoundsByExecutionId(executionId);
     const finalRoundIssues =
       allRounds
-        .filter((r) => r.roundNumber === MAX_ROUNDS)
+        .filter((r) => r.roundNumber === maxRounds)
         .flatMap((r) => r.issues)
         .join('; ') || 'none recorded';
 
-    const diagnostic = `Packet negotiation failed after ${MAX_ROUNDS} rounds. Final issues: ${finalRoundIssues}`;
+    const exhaustedReason = `NEGOTIATION_EXHAUSTED: no APPROVED verdict after ${maxRounds} rounds`;
+    const diagnostic = `${exhaustedReason}. Final issues: ${finalRoundIssues}`;
 
     await this.auditLogger.log({
       executionId,
@@ -238,8 +274,8 @@ export class PacketNegotiationOrchestrator {
     return {
       approved: false,
       finalPacket: currentPacket,
-      roundsCompleted: MAX_ROUNDS,
-      diagnosticMessage: diagnostic,
+      roundsCompleted: maxRounds,
+      diagnosticMessage: exhaustedReason,
     };
   }
 }
