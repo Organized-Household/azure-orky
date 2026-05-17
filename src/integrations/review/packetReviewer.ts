@@ -1,6 +1,7 @@
 import { InstructionPacket } from '../../domain/instructionPacket';
 import { AuditLogger } from '../../audit/auditLogger';
 import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
+import { TokenUsageRepository } from '../../db/repositories/tokenUsageRepository';
 
 export type ReviewVerdict = 'APPROVED' | 'QUESTIONS';
 
@@ -12,10 +13,12 @@ export interface PacketReviewResult {
 export class PacketReviewer {
   private retryClient: AnthropicRetryClient;
   private auditLogger: AuditLogger;
+  private tokenUsageRepo: TokenUsageRepository;
 
   constructor(auditLogger: AuditLogger) {
     this.retryClient = new AnthropicRetryClient();
     this.auditLogger = auditLogger;
+    this.tokenUsageRepo = new TokenUsageRepository();
   }
 
   async review(
@@ -69,6 +72,13 @@ export class PacketReviewer {
         throw new Error('Unexpected non-text response block from Claude API');
       }
       rawText = firstBlock.text;
+
+      try {
+        await this.tokenUsageRepo.record(executionId, 'packet_review', response.usage.input_tokens, response.usage.output_tokens);
+      } catch (recordErr: unknown) {
+        const recordError = recordErr instanceof Error ? recordErr : new Error(String(recordErr));
+        console.error('[PacketReviewer] Failed to record token usage (packet_review):', recordError.message);
+      }
     } catch (err: unknown) {
       if (err instanceof AnthropicRetryExhaustedError) {
         const message = err.message;
