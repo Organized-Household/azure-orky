@@ -4,6 +4,7 @@ import { PacketReviewer, PacketReviewResult } from '../integrations/review/packe
 import { PacketNegotiationRepository } from '../db/repositories/packetNegotiationRepository';
 import { ExecutionRepository } from '../db/repositories/executionRepository';
 import { CompilationChecker } from '../integrations/typescript/compilationChecker';
+import { parseNegotiationFailure } from './negotiationDiagnostic';
 
 const PROTECTED_FILES = [
   'src/db/repositories/executionRepository.ts',
@@ -145,6 +146,7 @@ export class PacketNegotiationOrchestrator {
             state: 'FAILED',
             status: 'error',
             message: stallReason,
+            metadata: parseNegotiationFailure(stallReason),
           });
 
           await this.executionRepository.failIfNotTerminal(executionId, stallReason);
@@ -269,6 +271,7 @@ export class PacketNegotiationOrchestrator {
       state: 'NEGOTIATING',
       status: 'error',
       message: diagnostic,
+      metadata: parseNegotiationFailure(exhaustedReason),
     });
 
     return {
