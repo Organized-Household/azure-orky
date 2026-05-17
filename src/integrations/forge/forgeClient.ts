@@ -9,6 +9,7 @@ import { CodebaseSnapshotFetcher } from '../github/codebaseSnapshotFetcher';
 import { buildConstraintBlock, FORGE_PROMPT_VERSION } from './forgeConstraints';
 import { AuditLogger } from '../../audit/auditLogger';
 import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
+import { TokenUsageRepository } from '../../db/repositories/tokenUsageRepository';
 
 export class ForgeInvocationError extends Error {
   constructor(
@@ -42,12 +43,14 @@ function extractJsonObject(text: string): string {
 export class ForgeClient {
   private retryClient: AnthropicRetryClient;
   private auditLogger: AuditLogger;
+  private tokenUsageRepo: TokenUsageRepository;
 
   readonly promptVersion = FORGE_PROMPT_VERSION;
 
   constructor(auditLogger: AuditLogger) {
     this.retryClient = new AnthropicRetryClient();
     this.auditLogger = auditLogger;
+    this.tokenUsageRepo = new TokenUsageRepository();
   }
 
   async generateInstructionPacket(
@@ -93,6 +96,13 @@ export class ForgeClient {
         code = 'FORGE_TIMEOUT';
       }
       throw new ForgeInvocationError(code, error.message, err);
+    }
+
+    try {
+      await this.tokenUsageRepo.record(executionId, 'forge_generate', response.usage.input_tokens, response.usage.output_tokens);
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[ForgeClient] Failed to record token usage (forge_generate):', error.message);
     }
 
     const block = response.content[0];
@@ -234,6 +244,13 @@ Schema:
         code = 'FORGE_TIMEOUT';
       }
       throw new ForgeInvocationError(code, error.message, err);
+    }
+
+    try {
+      await this.tokenUsageRepo.record(executionId, 'forge_revise', response.usage.input_tokens, response.usage.output_tokens);
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[ForgeClient] Failed to record token usage (forge_revise):', error.message);
     }
 
     const block = response.content[0];

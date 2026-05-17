@@ -13,6 +13,7 @@ import { RepoChangeSetRepository } from "../db/repositories/repoChangeSetReposit
 import { DecisionLogRepository } from "../db/repositories/decisionLogRepository";
 import { FailureHandler } from "./failureHandler";
 import { JiraWebhookValidationResult } from "../webhooks/jiraWebhookValidator";
+import { TokenUsageRepository } from "../db/repositories/tokenUsageRepository";
 
 export interface IntakeSuccess {
   received: true;
@@ -308,6 +309,22 @@ export class ExecutionFactory {
           status: 'warn',
           message: `Decision log write failed (execution still COMPLETED): ${msg}`,
         });
+      }
+
+      try {
+        const tokenSummary = await new TokenUsageRepository().sumByExecution(execution.executionId);
+        await this.auditLogger.log({
+          executionId: execution.executionId,
+          storyId: storyPayload.storyId,
+          step: 'token_usage_summary',
+          state: 'COMPLETED',
+          status: 'success',
+          message: 'Pipeline completed successfully',
+          metadata: tokenSummary,
+        });
+      } catch (tokenErr: unknown) {
+        const msg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
+        console.error('[ExecutionFactory] Failed to log token_usage_summary:', msg);
       }
 
       return {
