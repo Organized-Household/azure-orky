@@ -110,4 +110,23 @@ export class BatchExecutionRepository {
       `[BatchExecutionRepository] Batch ${batchExecutionId} finalized as ${finalState} (${failedCount} child execution(s) failed)`,
     );
   }
+
+  async hasActiveOrCompletedBatchForStory(storyId: string): Promise<boolean> {
+    const pool = getPool();
+    try {
+      const result = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+         FROM batch_executions
+         WHERE story_ids::jsonb @> jsonb_build_array($1::text)
+           AND current_state != 'FAILED'`,
+        [storyId],
+      );
+      const count = parseInt(result.rows[0]?.count ?? '0', 10);
+      return count > 0;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[BatchExecutionRepository] hasActiveOrCompletedBatchForStory failed for ${storyId}: ${msg} — failing open`);
+      return false;
+    }
+  }
 }
