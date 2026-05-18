@@ -3,20 +3,24 @@ export class JiraClient {
   private readonly email: string;
   private readonly apiToken: string;
 
-  constructor() {
-    const baseUrl = process.env.JIRA_BASE_URL;
-    const email = process.env.JIRA_EMAIL;
-    const apiToken = process.env.JIRA_API_TOKEN;
+  constructor(
+    baseUrl?: string,
+    email?: string,
+    apiToken?: string,
+  ) {
+    const resolvedBaseUrl = baseUrl ?? process.env.JIRA_BASE_URL;
+    const resolvedEmail = email ?? process.env.JIRA_EMAIL;
+    const resolvedApiToken = apiToken ?? process.env.JIRA_API_TOKEN;
 
-    if (!baseUrl || !email || !apiToken) {
+    if (!resolvedBaseUrl || !resolvedEmail || !resolvedApiToken) {
       throw new Error(
-        "Missing Jira configuration. Required env vars: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN",
+        'Missing Jira configuration. Required: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN (via constructor params or env vars)',
       );
     }
 
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
-    this.email = email;
-    this.apiToken = apiToken;
+    this.baseUrl = resolvedBaseUrl.replace(/\/+$/, '');
+    this.email = resolvedEmail;
+    this.apiToken = resolvedApiToken;
   }
 
   async transitionIssue(issueKey: string, transitionId: string): Promise<void> {

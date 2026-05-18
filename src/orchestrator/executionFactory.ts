@@ -198,7 +198,7 @@ export class ExecutionFactory {
 
     try {
       const storyRetrievalService =
-        this.storyRetrievalService ?? new StoryRetrievalService();
+        this.storyRetrievalService ?? new StoryRetrievalService(validation.projectKey ?? 'ORKY');
       storyPayload = await storyRetrievalService.retrieve(validation.issueId!);
 
       await this.executionRepository.updateState(
@@ -234,7 +234,7 @@ export class ExecutionFactory {
 
       // EPIC-3: Execute repository mutations
       const mutationExecutor = new RepositoryMutationExecutor();
-      await mutationExecutor.execute(execution.executionId, storyPayload.storyId, packet);
+      await mutationExecutor.execute(execution.executionId, storyPayload.storyId, packet, storyPayload.projectKey);
       currentState = EXECUTION_STATES.CHANGES_PREPARED;
 
       // EPIC-4 + 5: Branch, commit, PR, CI gate, auto-merge → COMPLETED
@@ -248,6 +248,7 @@ export class ExecutionFactory {
         prTitle: packet.prTitle,
         prBody: packet.prBody,
         commitMessage: packet.commitMessage,
+        projectKey: storyPayload.projectKey,
       });
 
       // STORY-6.1 + 6.2: Write back to Jira on success (non-blocking)
