@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { InstructionPacket } from '../domain/instructionPacket';
+import { CredentialResolver } from '../services/credentialResolver';
 import { ExecutionState } from '../domain/storyPayload';
 import { ExecutionRepository } from '../db/repositories/executionRepository';
 import { AuditLogger } from '../audit/auditLogger';
@@ -19,6 +20,7 @@ export class RepositoryMutationExecutor {
     executionId: string,
     storyId: string,
     packet: InstructionPacket,
+    projectKey: string,
   ): Promise<void> {
     let workspacePath: string | undefined;
 
@@ -39,10 +41,18 @@ export class RepositoryMutationExecutor {
     });
 
     try {
+      const resolver = new CredentialResolver();
+      const githubToken = await resolver.resolve(projectKey, 'github_token');
+      if (!githubToken) {
+        throw new Error(
+          `No GitHub token available for project ${projectKey} — set GH_TOKEN env var or seed via /projects/${projectKey}/credentials`,
+        );
+      }
       const workspace = await this.workspaceManager.createWorkspace(
         packet.targetRepository,
         packet.baseBranch,
         executionId,
+        githubToken,
       );
       workspacePath = workspace.workspacePath;
 

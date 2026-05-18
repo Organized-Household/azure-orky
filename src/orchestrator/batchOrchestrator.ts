@@ -301,7 +301,7 @@ export class BatchOrchestrator {
 
     // Execute repository mutations (clones repo, applies file ops, stores change set)
     const mutationExecutor = new RepositoryMutationExecutor();
-    await mutationExecutor.execute(execution.executionId, dip.storyIds[0], packet);
+    await mutationExecutor.execute(execution.executionId, dip.storyIds[0], packet, primaryStory?.projectKey ?? 'ORKY');
 
     // Create branch, commit, PR, run CI gate, optional auto-merge
     const prOrchestrator = new PrOrchestrator();
@@ -314,6 +314,7 @@ export class BatchOrchestrator {
       prTitle: dip.prTitle,
       prBody: dip.prBody,
       commitMessage: dip.commitMessage,
+      projectKey: primaryStory?.projectKey ?? 'ORKY',
     });
 
     // ORKY-49: Post Jira success update for every story covered by this DIP

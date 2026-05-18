@@ -19,12 +19,8 @@ export class WorkspaceManager {
     targetRepository: string,
     baseBranch: string,
     executionId: string,
+    githubToken: string,
   ): Promise<WorkspaceInfo> {
-    const githubToken = process.env.GH_TOKEN;
-    if (!githubToken) {
-      throw new Error('WorkspaceManager: GH_TOKEN environment variable is not set');
-    }
-
     const parts = targetRepository.split('/');
     if (parts.length !== 2) {
       throw new Error(

@@ -198,6 +198,76 @@ export async function handleAdminApi(
     return true;
   }
 
+  // Route: POST /projects/:projectKey/credentials
+  const credentialsPostMatch = pathname.match(/^\/projects\/([^/]+)\/credentials$/);
+  if (credentialsPostMatch && req.method === 'POST') {
+    if (!checkAdminAuth(req, res)) return true;
+    const projectKey = decodeURIComponent(credentialsPostMatch[1]);
+    let body: { credentialType?: unknown; credentialValue?: unknown };
+    try {
+      body = JSON.parse(await readRequestBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return true;
+    }
+    const { credentialType, credentialValue } = body;
+    if (!credentialType || !credentialValue) {
+      sendJson(res, 400, { error: 'Missing required fields: credentialType, credentialValue' });
+      return true;
+    }
+    const allowedTypes = [
+      'github_token', 'jira_api_token', 'jira_base_url', 'jira_email',
+      'jira_completion_transition_id', 'jira_failure_transition_id',
+    ];
+    if (!allowedTypes.includes(String(credentialType))) {
+      sendJson(res, 400, { error: `Invalid credentialType. Must be one of: ${allowedTypes.join(', ')}` });
+      return true;
+    }
+    try {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO project_credentials (project_key, credential_type, credential_value)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (project_key, credential_type) DO UPDATE
+           SET credential_value = EXCLUDED.credential_value,
+               updated_at       = NOW()`,
+        [projectKey, credentialType, credentialValue],
+      );
+      // NEVER log credentialValue
+      console.log(`[AdminApi] Credential upserted: ${String(credentialType)} for project ${projectKey}`);
+      sendJson(res, 201, { projectKey, credentialType, stored: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[AdminApi] Failed to store credential:', msg);
+      sendJson(res, 500, { error: 'Failed to store credential' });
+    }
+    return true;
+  }
+
+  // Route: GET /projects/:projectKey/credentials
+  // SECURITY: Returns credential_type and updated_at ONLY — NEVER credential_value
+  const credentialsGetMatch = pathname.match(/^\/projects\/([^/]+)\/credentials$/);
+  if (credentialsGetMatch && req.method === 'GET') {
+    if (!checkAdminAuth(req, res)) return true;
+    const projectKey = decodeURIComponent(credentialsGetMatch[1]);
+    try {
+      const pool = getPool();
+      const result = await pool.query(
+        `SELECT credential_type AS "credentialType", updated_at AS "updatedAt"
+         FROM project_credentials
+         WHERE project_key = $1
+         ORDER BY credential_type`,
+        [projectKey],
+      );
+      sendJson(res, 200, { credentials: result.rows as unknown[] } as Record<string, unknown>);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[AdminApi] Failed to fetch credentials:', msg);
+      sendJson(res, 500, { error: 'Failed to fetch credentials' });
+    }
+    return true;
+  }
+
   // No admin route matched
   return false;
 }

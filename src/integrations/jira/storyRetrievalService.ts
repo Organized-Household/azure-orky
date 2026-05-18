@@ -1,5 +1,6 @@
 import { StoryPayload } from "../../domain/storyPayload";
 import { JiraClient } from "./jiraClient";
+import { CredentialResolver } from '../../services/credentialResolver';
 
 type JiraIssue = {
   id?: string;
@@ -91,7 +92,10 @@ function extractPDEIdFromText(
 }
 
 export class StoryRetrievalService {
-  constructor(private readonly jiraClient: JiraClient = new JiraClient()) {}
+  constructor(
+    private readonly projectKey: string = 'ORKY',
+    private readonly jiraClient?: JiraClient,
+  ) {}
 
   async retrieve(issueKeyOrId: string): Promise<StoryPayload> {
     return this.retrieveStory(issueKeyOrId);
@@ -100,9 +104,25 @@ export class StoryRetrievalService {
   async retrieveStory(issueKeyOrId: string): Promise<StoryPayload> {
     console.log('[StoryRetrieval] retrieveStory called with:', issueKeyOrId);
 
+    // Resolve per-project Jira credentials
+    let client = this.jiraClient;
+    if (!client) {
+      const resolver = new CredentialResolver();
+      const [baseUrl, email, apiToken] = await Promise.all([
+        resolver.resolve(this.projectKey, 'jira_base_url'),
+        resolver.resolve(this.projectKey, 'jira_email'),
+        resolver.resolve(this.projectKey, 'jira_api_token'),
+      ]);
+      client = new JiraClient(
+        baseUrl ?? undefined,
+        email ?? undefined,
+        apiToken ?? undefined,
+      );
+    }
+
     let issue: JiraIssue;
     try {
-      issue = (await this.jiraClient.getIssue(issueKeyOrId)) as JiraIssue;
+      issue = (await client.getIssue(issueKeyOrId)) as JiraIssue;
       console.log('[StoryRetrieval] Jira response received, issue key:', issue?.key);
     } catch (error: any) {
       console.error('[StoryRetrieval] jiraClient.getIssue failed');

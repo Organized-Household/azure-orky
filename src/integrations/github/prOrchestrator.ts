@@ -9,6 +9,7 @@ import { CiStatusMonitor } from './ciStatusMonitor';
 import { CiPoller } from './ciPoller';
 import { MergeController } from './mergeController';
 import { createOctokit } from './githubClient';
+import { CredentialResolver } from '../../services/credentialResolver';
 
 export interface PrOrchestratorInput {
   executionId: string;
@@ -16,6 +17,7 @@ export interface PrOrchestratorInput {
   storyTitle: string;
   branchNameHint: string;
   targetRepository: string;
+  projectKey: string;
   // STORY-9.4: From extended DIP
   prTitle?: string;
   prBody?: string;
@@ -32,7 +34,15 @@ export class PrOrchestrator {
   private ciStatusMonitor = new CiStatusMonitor();
 
   async run(input: PrOrchestratorInput): Promise<void> {
-    const { executionId, storyId, storyTitle, branchNameHint, targetRepository } = input;
+    const { executionId, storyId, storyTitle, branchNameHint, targetRepository, projectKey } = input;
+
+    const resolver = new CredentialResolver();
+    const githubToken = await resolver.resolve(projectKey, 'github_token');
+    if (!githubToken) {
+      throw new Error(
+        `No GitHub token available for project ${projectKey} — set GH_TOKEN env var or seed via /projects/${projectKey}/credentials`,
+      );
+    }
 
     const parts = targetRepository.split('/');
     if (parts.length !== 2) {
@@ -154,7 +164,7 @@ export class PrOrchestrator {
         message: `Entered CI_PENDING. Polling checks for head SHA: ${headSha.slice(0, 7)}`,
       });
 
-      const octokit = createOctokit();
+      const octokit = createOctokit(githubToken);
       const ciPoller = new CiPoller(octokit, this.auditLogger);
       const pollResult = await ciPoller.pollUntilComplete({
         executionId,
