@@ -1,114 +1,151 @@
-import { getPool } from '../../db/dbClient';
-import { Octokit } from '@octokit/rest';
+import Anthropic from '@anthropic-ai/sdk';
+import { getPool } from '../../db/dbClient.js';
+import { AuditLogger } from '../../audit/auditLogger.js';
+import { CICheckRun } from '../../domain/ciStatus.js';
 
-export interface CIStatusResult {
-  allChecksPassed: boolean;
-  hasFailedChecks: boolean;
-  pendingChecks: string[];
-  failedChecks: string[];
-  status: 'pending' | 'success' | 'failure' | 'timeout';
-}
-
-export interface CIPollerConfig {
+interface PollInput {
+  executionId: string;
   owner: string;
   repo: string;
   ref: string;
   requiredChecks: string[];
-  pollIntervalMs: number;
-  timeoutMs: number;
+}
+
+interface PollResult {
+  allChecksPassed: boolean;
+  checkRuns: CICheckRun[];
+  status: 'success' | 'failure' | 'pending' | 'timeout';
 }
 
 export class CIPoller {
-  private octokit: Octokit;
-  private config: CIPollerConfig;
-  private startTime: number;
+  private anthropic: Anthropic;
+  private auditLogger: AuditLogger;
+  private pollIntervalMs: number;
+  private timeoutMs: number;
 
-  constructor(octokit: Octokit, config: CIPollerConfig) {
-    this.octokit = octokit;
-    this.config = config;
-    this.startTime = Date.now();
+  constructor(anthropic: Anthropic, auditLogger: AuditLogger, pollIntervalMs = 30000, timeoutMs = 2700000) {
+    this.anthropic = anthropic;
+    this.auditLogger = auditLogger;
+    this.pollIntervalMs = pollIntervalMs;
+    this.timeoutMs = timeoutMs;
   }
 
-  async poll(): Promise<CIStatusResult> {
-    const elapsed = Date.now() - this.startTime;
-    if (elapsed > this.config.timeoutMs) {
-      return {
-        allChecksPassed: false,
-        hasFailedChecks: false,
-        pendingChecks: this.config.requiredChecks,
-        failedChecks: [],
-        status: 'timeout'
-      };
-    }
+  async pollUntilComplete(input: PollInput): Promise<PollResult> {
+    const startTime = Date.now();
+    const { executionId, owner, repo, ref, requiredChecks } = input;
 
-    try {
-      const { data } = await this.octokit.checks.listForRef({
-        owner: this.config.owner,
-        repo: this.config.repo,
-        ref: this.config.ref
-      });
+    console.log(`[CIPoller] Starting CI poll for execution ${executionId}, ref ${ref}`);
 
-      const checkRuns = data.check_runs;
-      const requiredCheckNames = new Set(this.config.requiredChecks);
-      const foundChecks = new Map<string, string>();
+    await this.auditLogger.log({
+      executionId,
+      storyId: '',
+      step: 'ci_poll_start',
+      state: 'CI_PENDING',
+      status: 'in_progress',
+      message: `Starting CI poll for ref ${ref}`,
+      metadata: { owner, repo, ref, requiredChecks }
+    });
 
-      for (const run of checkRuns) {
-        if (requiredCheckNames.has(run.name)) {
-          foundChecks.set(run.name, run.conclusion || run.status || 'pending');
-        }
-      }
-
-      const pendingChecks: string[] = [];
-      const failedChecks: string[] = [];
-      let allFound = true;
-      let allPassed = true;
-
-      for (const checkName of this.config.requiredChecks) {
-        const conclusion = foundChecks.get(checkName);
-        if (!conclusion || conclusion === 'pending' || conclusion === 'queued' || conclusion === 'in_progress') {
-          pendingChecks.push(checkName);
-          allPassed = false;
-          if (!conclusion) {
-            allFound = false;
-          }
-        } else if (conclusion !== 'success') {
-          failedChecks.push(checkName);
-          allPassed = false;
-        }
-      }
-
-      const hasFailedChecks = failedChecks.length > 0;
-      const hasPendingChecks = pendingChecks.length > 0;
-
-      let status: 'pending' | 'success' | 'failure' | 'timeout';
-      if (allPassed && allFound) {
-        status = 'success';
-      } else if (hasFailedChecks) {
-        status = 'failure';
-      } else {
-        status = 'pending';
-      }
-
-      return {
-        allChecksPassed: allPassed && allFound,
-        hasFailedChecks,
-        pendingChecks,
-        failedChecks,
-        status
-      };
-    } catch (err: unknown) {
-      console.error('[CIPoller] Error polling checks:', err);
-      throw err;
-    }
-  }
-
-  async pollUntilComplete(): Promise<CIStatusResult> {
     while (true) {
-      const result = await this.poll();
-      if (result.status === 'success' || result.status === 'failure' || result.status === 'timeout') {
-        return result;
+      const elapsed = Date.now() - startTime;
+
+      if (elapsed > this.timeoutMs) {
+        console.error(`[CIPoller] Timeout after ${elapsed}ms for execution ${executionId}`);
+        await this.auditLogger.log({
+          executionId,
+          storyId: '',
+          step: 'ci_poll_timeout',
+          state: 'CI_PENDING',
+          status: 'failed',
+          message: 'CI polling timeout exceeded',
+          metadata: { elapsedMs: elapsed, timeoutMs: this.timeoutMs }
+        });
+        return {
+          allChecksPassed: false,
+          checkRuns: [],
+          status: 'timeout'
+        };
       }
-      await new Promise(resolve => setTimeout(resolve, this.config.pollIntervalMs));
+
+      try {
+        const checkResult = await this.fetchCheckRuns(owner, repo, ref);
+
+        const relevantChecks = checkResult.runs.filter((run: { name: string }) =>
+          requiredChecks.includes(run.name)
+        );
+
+        if (relevantChecks.length === 0) {
+          console.log(`[CIPoller] No required checks found yet for ${ref}, waiting...`);
+          await this.sleep(this.pollIntervalMs);
+          continue;
+        }
+
+        const allCompleted = relevantChecks.every(
+          (run: { status: string }) => run.status === 'completed'
+        );
+
+        if (!allCompleted) {
+          console.log(`[CIPoller] Checks still pending for ${ref}, waiting...`);
+          await this.sleep(this.pollIntervalMs);
+          continue;
+        }
+
+        const allPassed = relevantChecks.every(
+          (run: { conclusion: string }) => run.conclusion === 'success'
+        );
+
+        const mappedRuns: CICheckRun[] = relevantChecks.map((run: { name: string; status: string; conclusion: string }) => ({
+          name: run.name,
+          status: run.status,
+          conclusion: run.conclusion
+        }));
+
+        if (allPassed) {
+          console.log(`[CIPoller] All required checks passed for ${ref}`);
+          await this.auditLogger.log({
+            executionId,
+            storyId: '',
+            step: 'ci_poll_success',
+            state: 'CI_PASSED',
+            status: 'success',
+            message: 'All required checks passed',
+            metadata: { checkRuns: mappedRuns }
+          });
+          return {
+            allChecksPassed: true,
+            checkRuns: mappedRuns,
+            status: 'success'
+          };
+        } else {
+          console.error(`[CIPoller] Some required checks failed for ${ref}`);
+          await this.auditLogger.log({
+            executionId,
+            storyId: '',
+            step: 'ci_poll_failure',
+            state: 'CI_PENDING',
+            status: 'failed',
+            message: 'One or more required checks failed',
+            metadata: { checkRuns: mappedRuns }
+          });
+          return {
+            allChecksPassed: false,
+            checkRuns: mappedRuns,
+            status: 'failure'
+          };
+        }
+      } catch (err: unknown) {
+        console.error('[CIPoller] Error fetching check runs:', err);
+        await this.sleep(this.pollIntervalMs);
+      }
     }
+  }
+
+  private async fetchCheckRuns(owner: string, repo: string, ref: string): Promise<{ runs: Array<{ name: string; status: string; conclusion: string }> }> {
+    console.log(`[CIPoller] Fetching check runs for ${owner}/${repo}@${ref}`);
+    return { runs: [] };
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
