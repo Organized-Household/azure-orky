@@ -4,6 +4,7 @@ import * as path from 'path';
 import { StoryPayload } from '../../domain/storyPayload';
 import { InstructionPacket } from '../../domain/instructionPacket';
 import { ProjectContextRepository } from '../../db/repositories/projectContextRepository';
+import { ProjectRepository, ProjectRecord } from '../../db/repositories/projectRepository';
 import { DecisionLogRepository } from '../../db/repositories/decisionLogRepository';
 import { CodebaseSnapshotFetcher } from '../github/codebaseSnapshotFetcher';
 import { buildConstraintBlock, FORGE_PROMPT_VERSION } from './forgeConstraints';
@@ -151,7 +152,12 @@ export class ForgeClient {
       migrationInventory = '_(unavailable)_';
     }
 
-    const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
+    const projectRecord = await new ProjectRepository().getByProjectKey(storyPayload.projectKey);
+    if (!projectRecord) {
+      throw new Error(
+        `No project configuration found for project key: ${storyPayload.projectKey} — seed the projects table`,
+      );
+    }
     const issueList = issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n');
 
     const currentFilesSection = currentPacket.fileOperations
@@ -204,8 +210,8 @@ Schema:
 {
   "packetId": "<uuid>",
   "storyId": "${storyPayload.storyId}",
-  "targetRepository": "${repoOwner}/orky",
-  "baseBranch": "dev",
+  "targetRepository": "${projectRecord.targetRepository}",
+  "baseBranch": "${projectRecord.baseBranch}",
   "branchNameHint": "<kebab-case>",
   "fileOperations": [{ "operation": "create|modify|replace|delete", "path": "<path>", "content": "<full content>" }],
   "validationCommands": [],
@@ -279,16 +285,37 @@ Schema:
     implementationHistory: string;
     codebaseSnapshot: string;
     migrationInventory: string;
+    projectRecord: ProjectRecord;
+    constraintBlock: string;
   }> {
     const epicId = storyPayload.PDEEpicID ?? storyPayload.epicId ?? '';
 
+    // 0. Project configuration — required, throws on missing
+    const projectRepo = new ProjectRepository();
+    const projectRecord = await projectRepo.getByProjectKey(storyPayload.projectKey);
+    if (!projectRecord) {
+      throw new Error(
+        `No project configuration found for project key: ${storyPayload.projectKey} — seed the projects table`,
+      );
+    }
+
     // 1. Project context (PDE artifacts) — non-fatal
     let projectContext = '';
+    let constraintBlock = buildConstraintBlock();
     try {
       const projectContextRepo = new ProjectContextRepository();
       const artifacts = await projectContextRepo.getByProjectKey(storyPayload.projectKey);
-      if (artifacts.length > 0) {
-        projectContext = artifacts
+
+      // Extract forge_constraints artifact if present
+      const constraintsArtifact = artifacts.find((a) => a.artifactType === 'forge_constraints');
+      if (constraintsArtifact) {
+        constraintBlock = constraintsArtifact.content;
+      }
+
+      // Build projectContext from remaining artifacts (exclude forge_constraints from prompt display)
+      const displayArtifacts = artifacts.filter((a) => a.artifactType !== 'forge_constraints');
+      if (displayArtifacts.length > 0) {
+        projectContext = displayArtifacts
           .map((a) => `### ${a.artifactType.toUpperCase()}\n${a.content}`)
           .join('\n\n');
       } else {
@@ -297,6 +324,7 @@ Schema:
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       projectContext = `_(PDE artifact fetch failed: ${msg})_`;
+      // constraintBlock already set to default above — safe to continue
     }
 
     // 2. Implementation history (decision logs) — non-fatal
@@ -364,7 +392,7 @@ Schema:
       migrationInventory = `_(Migration inventory unavailable: ${msg})_`;
     }
 
-    return { projectContext, implementationHistory, codebaseSnapshot, migrationInventory };
+    return { projectContext, implementationHistory, codebaseSnapshot, migrationInventory, projectRecord, constraintBlock };
   }
 
   private buildPrompt(
@@ -374,9 +402,10 @@ Schema:
       implementationHistory: string;
       codebaseSnapshot: string;
       migrationInventory: string;
+      projectRecord: ProjectRecord;
+      constraintBlock: string;
     },
   ): string {
-    const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
     const epicId = storyPayload.PDEEpicID ?? storyPayload.epicId ?? '';
 
     return `You are Forge, Senior SaaS Engineer implementing Orky, the AI-Orchestrated SaaS Engineering System.
@@ -385,7 +414,7 @@ You implement specifications exactly as written. You write safe, production-qual
 
 ## Tech Stack
 - Node.js + TypeScript, Supabase PostgreSQL, Railway Container (node:22-alpine)
-- GitHub repo: ${repoOwner}/orky, default branch: dev
+- GitHub repo: ${context.projectRecord.targetRepository}, default branch: ${context.projectRecord.baseBranch}
 - pg driver — $1/$2 positional params only. Never named params.
 
 ## Hard Constraints — Never Violate
@@ -482,8 +511,8 @@ Schema:
 {
   "packetId": "<uuid>",
   "storyId": "${storyPayload.storyId}",
-  "targetRepository": "${repoOwner}/orky",
-  "baseBranch": "dev",
+  "targetRepository": "${context.projectRecord.targetRepository}",
+  "baseBranch": "${context.projectRecord.baseBranch}",
   "branchNameHint": "<kebab-case hint from story summary>",
   "fileOperations": [
     {
@@ -498,6 +527,6 @@ Schema:
   "commitMessage": "<conventional commit: feat(storyId): description>",
   "implementationSummary": "<human-readable summary of what was built and why, for the decision log>",
   "jiraLinkage": "${storyPayload.jiraIssueKey ?? storyPayload.storyId}"
-}` + '\n\n' + buildConstraintBlock();
+}` + '\n\n' + context.constraintBlock;
   }
 }
