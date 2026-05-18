@@ -1,50 +1,121 @@
-import { createOctokit } from './githubClient';
+import { getPool } from '../../db/dbClient';
+import { AuditLogger } from '../../audit/auditLogger';
 
-export interface CheckRunSummary {
+interface CheckRun {
+  id: number;
   name: string;
   status: string;
   conclusion: string | null;
-  detailsUrl: string | null;
+  head_sha: string;
 }
 
-export interface CiStatusResult {
-  total: number;
-  passed: number;
-  failed: number;
-  pending: number;
+interface CIStatusResult {
   allPassed: boolean;
-  failedChecks: CheckRunSummary[];
+  requiredChecksPassed: boolean;
+  failedChecks: string[];
+  pendingChecks: string[];
 }
 
-export class CiStatusMonitor {
-  async fetchStatus(
-    repositoryOwner: string,
-    repositoryName: string,
-    commitSha: string,
-  ): Promise<CiStatusResult> {
-    const octokit = createOctokit();
-    const { data } = await octokit.checks.listForRef({
-      owner: repositoryOwner,
-      repo: repositoryName,
-      ref: commitSha,
+export class CIStatusMonitor {
+  private auditLogger: AuditLogger;
+
+  constructor(auditLogger: AuditLogger) {
+    this.auditLogger = auditLogger;
+  }
+
+  async evaluateChecks(
+    executionId: string,
+    storyId: string,
+    checks: CheckRun[],
+    requiredChecks: string[]
+  ): Promise<CIStatusResult> {
+    console.log(
+      `[CIStatusMonitor] Evaluating ${checks.length} checks for execution ${executionId}`
+    );
+
+    const checkMap = new Map<string, CheckRun>();
+    checks.forEach((r: CheckRun) => checkMap.set(r.name, r));
+
+    const missingChecks = requiredChecks.filter((name: string) => !checkMap.has(name));
+    const presentChecks = requiredChecks.filter((name: string) => checkMap.has(name));
+
+    const failedChecks = presentChecks.filter((name: string) => {
+      const run = checkMap.get(name);
+      return run && run.status === 'completed' && run.conclusion !== 'success';
     });
 
-    const runs = data.check_runs;
-    const failedChecks = runs.filter((r) => r.conclusion === 'failure');
-    const pending = runs.filter((r) => r.status !== 'completed');
+    const pendingChecks = presentChecks.filter((name: string) => {
+      const run = checkMap.get(name);
+      return run && run.status !== 'completed';
+    });
+
+    const passedChecks = presentChecks.filter((name: string) => {
+      const run = checkMap.get(name);
+      return run && run.status === 'completed' && run.conclusion === 'success';
+    });
+
+    const requiredChecksPassed = missingChecks.length === 0 && failedChecks.length === 0 && pendingChecks.length === 0;
+    const allPassed = requiredChecksPassed && passedChecks.length === requiredChecks.length;
+
+    if (missingChecks.length > 0) {
+      console.error(
+        `[CIStatusMonitor] Execution ${executionId}: Missing required checks:`,
+        missingChecks
+      );
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'CI_STATUS_EVALUATION',
+        state: 'CI_PENDING',
+        status: 'WARNING',
+        message: `Missing required checks: ${missingChecks.join(', ')}`,
+        metadata: { missingChecks }
+      });
+    }
+
+    if (failedChecks.length > 0) {
+      console.error(
+        `[CIStatusMonitor] Execution ${executionId}: Failed checks:`,
+        failedChecks
+      );
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'CI_STATUS_EVALUATION',
+        state: 'CI_PENDING',
+        status: 'FAILED',
+        message: `Failed checks: ${failedChecks.join(', ')}`,
+        metadata: { failedChecks }
+      });
+    }
+
+    if (pendingChecks.length > 0) {
+      console.log(
+        `[CIStatusMonitor] Execution ${executionId}: Pending checks:`,
+        pendingChecks
+      );
+    }
+
+    if (allPassed) {
+      console.log(
+        `[CIStatusMonitor] Execution ${executionId}: All required checks passed`
+      );
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'CI_STATUS_EVALUATION',
+        state: 'CI_PASSED',
+        status: 'SUCCESS',
+        message: 'All required checks passed',
+        metadata: { passedChecks }
+      });
+    }
 
     return {
-      total: runs.length,
-      passed: runs.filter((r) => r.conclusion === 'success').length,
-      failed: failedChecks.length,
-      pending: pending.length,
-      allPassed: failedChecks.length === 0 && pending.length === 0,
-      failedChecks: failedChecks.map((r) => ({
-        name: r.name,
-        status: r.status,
-        conclusion: r.conclusion ?? null,
-        detailsUrl: r.details_url ?? null,
-      })),
+      allPassed,
+      requiredChecksPassed,
+      failedChecks,
+      pendingChecks
     };
   }
 }

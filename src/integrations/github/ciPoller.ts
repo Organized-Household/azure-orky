@@ -1,129 +1,118 @@
+import { getPool } from '../../db/dbClient';
 import { Octokit } from '@octokit/rest';
-import { AuditLogger } from '../../audit/auditLogger';
 
-export type CheckConclusion =
-  | 'success'
-  | 'failure'
-  | 'cancelled'
-  | 'timed_out'
-  | 'action_required'
-  | 'neutral'
-  | 'skipped'
-  | null;
-
-export interface CiPollResult {
-  allPassed: boolean;
-  failureReason?: string;
-  checkSummary: Array<{ name: string; status: string; conclusion: CheckConclusion }>;
+interface CIPollContext {
+  executionId: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  requiredChecks: string[];
 }
 
-const FAILING_CONCLUSIONS: CheckConclusion[] = [
-  'failure',
-  'cancelled',
-  'timed_out',
-  'action_required',
-];
+interface CheckRun {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  head_sha: string;
+}
 
-const POLL_INTERVAL_MS = 30_000;
-const MAX_POLL_DURATION_MS = 45 * 60 * 1000;
+export class CIPoller {
+  private octokit: Octokit;
+  private pollIntervalMs: number;
+  private maxPollDurationMs: number;
 
-export class CiPoller {
-  constructor(
-    private readonly octokit: Octokit,
-    private readonly auditLogger: AuditLogger,
-  ) {}
-
-  async pollUntilComplete(params: {
-    executionId: string;
-    storyId: string;
-    owner: string;
-    repo: string;
-    ref: string;
-  }): Promise<CiPollResult> {
-    const { executionId, storyId, owner, repo, ref } = params;
-    const deadline = Date.now() + MAX_POLL_DURATION_MS;
-    let pollCount = 0;
-
-    await this.auditLogger.log({
-      executionId,
-      storyId,
-      step: 'ci_poll_started',
-      state: 'CI_PENDING',
-      status: 'info',
-      message: `Starting CI poll for ref ${ref.slice(0, 7)}. Interval: ${POLL_INTERVAL_MS / 1000}s, timeout: 45m.`,
-    });
-
-    while (Date.now() < deadline) {
-      pollCount++;
-
-      const checkSummary = await this.fetchCheckSummary({ owner, repo, ref });
-
-      const allComplete = checkSummary.every((c) => c.status === 'completed');
-      const anyFailed = checkSummary.some(
-        (c) => c.status === 'completed' && FAILING_CONCLUSIONS.includes(c.conclusion),
-      );
-
-      await this.auditLogger.log({
-        executionId,
-        storyId,
-        step: 'ci_poll_tick',
-        state: 'CI_PENDING',
-        status: 'info',
-        message: `Poll #${pollCount}: ${checkSummary.length} check(s). allComplete=${allComplete} anyFailed=${anyFailed}`,
-        metadata: { checkSummary },
-      });
-
-      if (anyFailed) {
-        const failed = checkSummary.filter((c) => FAILING_CONCLUSIONS.includes(c.conclusion));
-        const failureReason = `CI checks failed: ${failed.map((c) => `${c.name}=${c.conclusion}`).join(', ')}`;
-        return { allPassed: false, failureReason, checkSummary };
-      }
-
-      if (allComplete) {
-        return { allPassed: true, checkSummary };
-      }
-
-      if (Date.now() + POLL_INTERVAL_MS < deadline) {
-        await this.sleep(POLL_INTERVAL_MS);
-      } else {
-        break;
-      }
-    }
-
-    const finalSummary = await this.fetchCheckSummary({ owner, repo, ref });
-    const pendingChecks = finalSummary.filter((c) => c.status !== 'completed');
-    const failureReason = `CI polling timed out after 45 minutes. Still pending: ${pendingChecks.map((c) => c.name).join(', ') || 'unknown'}`;
-
-    await this.auditLogger.log({
-      executionId,
-      storyId,
-      step: 'ci_poll_timeout',
-      state: 'CI_PENDING',
-      status: 'error',
-      message: failureReason,
-      metadata: { finalSummary },
-    });
-
-    return { allPassed: false, failureReason, checkSummary: finalSummary };
+  constructor(octokit: Octokit, pollIntervalMs = 30000, maxPollDurationMs = 2700000) {
+    this.octokit = octokit;
+    this.pollIntervalMs = pollIntervalMs;
+    this.maxPollDurationMs = maxPollDurationMs;
   }
 
-  private async fetchCheckSummary(params: {
-    owner: string;
-    repo: string;
-    ref: string;
-  }): Promise<Array<{ name: string; status: string; conclusion: CheckConclusion }>> {
-    const { data } = await this.octokit.checks.listForRef({
-      owner: params.owner,
-      repo: params.repo,
-      ref: params.ref,
-      per_page: 100,
-    });
+  async pollUntilComplete(
+    context: CIPollContext
+  ): Promise<{ success: boolean; checks: CheckRun[]; timedOut: boolean }> {
+    const startTime = Date.now();
+    const { executionId, owner, repo, prNumber, requiredChecks } = context;
 
-    return data.check_runs.map((run) => ({
-      name: run.name,
-      status: run.status,
-      conclusion: run.conclusion as CheckConclusion,
-    }));
+    console.log(`[CIPoller] Starting poll for execution ${executionId}, PR #${prNumber}`);
+
+    while (true) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > this.maxPollDurationMs) {
+        console.error(
+          `[CIPoller] Timeout after ${elapsed}ms for execution ${executionId}`
+        );
+        return { success: false, checks: [], timedOut: true };
+      }
+
+      try {
+        const prData = await this.octokit.pulls.get({
+          owner,
+          repo,
+          pull_number: prNumber
+        });
+
+        const headSha = prData.data.head.sha;
+
+        const { data: checkRuns } = await this.octokit.checks.listForRef({
+          owner,
+          repo,
+          ref: headSha
+        });
+
+        const relevantChecks = checkRuns.check_runs.filter((run: CheckRun) =>
+          requiredChecks.includes(run.name)
+        );
+
+        console.log(
+          `[CIPoller] Execution ${executionId}: Found ${relevantChecks.length} required checks`
+        );
+
+        const allComplete = relevantChecks.every(
+          (run: CheckRun) => run.status === 'completed'
+        );
+
+        if (!allComplete) {
+          console.log(
+            `[CIPoller] Execution ${executionId}: Checks still pending, waiting ${this.pollIntervalMs}ms`
+          );
+          await this.sleep(this.pollIntervalMs);
+          continue;
+        }
+
+        const allSuccess = relevantChecks.every(
+          (run: CheckRun) => run.conclusion === 'success'
+        );
+
+        if (allSuccess) {
+          console.log(
+            `[CIPoller] Execution ${executionId}: All required checks passed`
+          );
+          return { success: true, checks: relevantChecks, timedOut: false };
+        } else {
+          const failed = relevantChecks.filter(
+            (run: CheckRun) => run.conclusion !== 'success'
+          );
+          console.error(
+            `[CIPoller] Execution ${executionId}: ${failed.length} checks failed:`,
+            failed.map((run: CheckRun) => `${run.name}: ${run.conclusion}`)
+          );
+          return { success: false, checks: relevantChecks, timedOut: false };
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          console.error(
+            `[CIPoller] Error polling checks for execution ${executionId}:`,
+            err.message
+          );
+        } else {
+          console.error(
+            `[CIPoller] Unknown error polling checks for execution ${executionId}`
+          );
+        }
+        throw err;
+      }
+    }
   }
 
   private sleep(ms: number): Promise<void> {
