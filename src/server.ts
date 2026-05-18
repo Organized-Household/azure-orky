@@ -3,6 +3,7 @@ import http from "http";
 import sql from "mssql";
 import { handleJiraWebhook } from "./webhooks/jiraWebhookController";
 import { ExecutionTraceService } from "./observability/executionTraceService";
+import { handleAdminApi } from "./admin/adminApiHandler";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -19,6 +20,12 @@ const config: sql.config = {
 
 const server = http.createServer(async (req, res) => {
   const pathname = new URL(req.url || "/", "http://localhost").pathname;
+
+  // Admin API — project setup and artifact management
+  if (pathname.startsWith('/projects')) {
+    const handled = await handleAdminApi(req, res, pathname);
+    if (handled) return;
+  }
 
   if (pathname === "/webhooks/jira") {
     await handleJiraWebhook(req, res);
