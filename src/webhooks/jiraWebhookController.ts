@@ -1,5 +1,6 @@
 import { IncomingMessage, ServerResponse } from "http";
 import { ExecutionFactory } from "../orchestrator/executionFactory";
+import { ExecutionRepository } from "../db/repositories/executionRepository";
 import { validateJiraWebhookPayload } from "./jiraWebhookValidator";
 import { BatchCollector } from "../orchestrator/batchCollector";
 import { BatchExecutionRepository } from "../db/repositories/batchExecutionRepository";
@@ -69,6 +70,33 @@ export async function handleJiraWebhook(
     const storyId = validation.storyId!;
     const epicId = validation.epicId!;
     const projectKey = validation.projectKey!;
+
+    // Pre-flight idempotency gate — check BOTH executions and batch_executions
+    // This fires before batchCollector to prevent duplicate processing on Jira webhook retries
+    try {
+      const executionRepo = new ExecutionRepository();
+      const batchRepo = new BatchExecutionRepository();
+      const [alreadyInExecutions, alreadyInBatch] = await Promise.all([
+        executionRepo.hasActiveOrCompletedExecution(storyId),
+        batchRepo.hasActiveOrCompletedBatchForStory(storyId),
+      ]);
+      if (alreadyInExecutions || alreadyInBatch) {
+        console.info(
+          `[WebhookController] Idempotency gate: execution already exists for story ${storyId} — ignoring duplicate webhook`,
+        );
+        sendJson(res, 200, {
+          received: true,
+          ignored: true,
+          reason: 'execution_already_exists',
+          storyId,
+        });
+        return;
+      }
+    } catch (err: unknown) {
+      // If idempotency check fails, log and continue — do not block processing
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[WebhookController] Idempotency pre-flight check failed for ${storyId}: ${msg} — proceeding`);
+    }
 
     await batchCollector.collectStory(storyId, epicId, projectKey);
 
