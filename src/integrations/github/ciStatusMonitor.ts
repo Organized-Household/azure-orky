@@ -1,50 +1,53 @@
-import { createOctokit } from './githubClient';
+import { getPool } from '../../db/dbClient';
+import { Octokit } from '@octokit/rest';
+import { CIPoller, CIPollerConfig, CIStatusResult } from './ciPoller';
 
-export interface CheckRunSummary {
-  name: string;
-  status: string;
-  conclusion: string | null;
-  detailsUrl: string | null;
+export interface MonitorConfig {
+  executionId: string;
+  owner: string;
+  repo: string;
+  ref: string;
+  requiredChecks: string[];
+  pollIntervalMs?: number;
+  timeoutMs?: number;
 }
 
-export interface CiStatusResult {
-  total: number;
-  passed: number;
-  failed: number;
-  pending: number;
-  allPassed: boolean;
-  failedChecks: CheckRunSummary[];
-}
+export class CIStatusMonitor {
+  private octokit: Octokit;
+  private executionId: string;
 
-export class CiStatusMonitor {
-  async fetchStatus(
-    repositoryOwner: string,
-    repositoryName: string,
-    commitSha: string,
-  ): Promise<CiStatusResult> {
-    const octokit = createOctokit();
-    const { data } = await octokit.checks.listForRef({
-      owner: repositoryOwner,
-      repo: repositoryName,
-      ref: commitSha,
-    });
+  constructor(octokit: Octokit, executionId: string) {
+    this.octokit = octokit;
+    this.executionId = executionId;
+  }
 
-    const runs = data.check_runs;
-    const failedChecks = runs.filter((r) => r.conclusion === 'failure');
-    const pending = runs.filter((r) => r.status !== 'completed');
-
-    return {
-      total: runs.length,
-      passed: runs.filter((r) => r.conclusion === 'success').length,
-      failed: failedChecks.length,
-      pending: pending.length,
-      allPassed: failedChecks.length === 0 && pending.length === 0,
-      failedChecks: failedChecks.map((r) => ({
-        name: r.name,
-        status: r.status,
-        conclusion: r.conclusion ?? null,
-        detailsUrl: r.details_url ?? null,
-      })),
+  async monitor(config: MonitorConfig): Promise<CIStatusResult> {
+    const pollerConfig: CIPollerConfig = {
+      owner: config.owner,
+      repo: config.repo,
+      ref: config.ref,
+      requiredChecks: config.requiredChecks,
+      pollIntervalMs: config.pollIntervalMs || 30000,
+      timeoutMs: config.timeoutMs || 2700000
     };
+
+    const poller = new CIPoller(this.octokit, pollerConfig);
+    const result = await poller.pollUntilComplete();
+
+    await this.persistCIStatus(result);
+    return result;
+  }
+
+  private async persistCIStatus(result: CIStatusResult): Promise<void> {
+    const pool = getPool();
+    try {
+      await pool.query(
+        `UPDATE executions SET ci_status = $1, updated_at = NOW() WHERE execution_id = $2`,
+        [result.status, this.executionId]
+      );
+    } catch (err: unknown) {
+      console.error('[CIStatusMonitor] Error persisting CI status:', err);
+      throw err;
+    }
   }
 }
