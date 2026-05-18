@@ -1,53 +1,72 @@
-import { getPool } from '../../db/dbClient';
-import { Octokit } from '@octokit/rest';
-import { CIPoller, CIPollerConfig, CIStatusResult } from './ciPoller';
+import { getPool } from '../../db/dbClient.js';
+import { AuditLogger } from '../../audit/auditLogger.js';
+import { CIPoller, CIPollerConfig, CIPollerResult } from './ciPoller.js';
+import type { Octokit } from '@octokit/rest';
+import type { RestEndpointMethodTypes } from '@octokit/plugin-rest-endpoint-methods';
 
-export interface MonitorConfig {
+type WorkflowRun = RestEndpointMethodTypes['actions']['listWorkflowRunsForRepo']['response']['data']['workflow_runs'][0];
+
+export interface CIStatusMonitorConfig {
   executionId: string;
+  storyId: string;
   owner: string;
   repo: string;
-  ref: string;
+  headSha: string;
   requiredChecks: string[];
-  pollIntervalMs?: number;
-  timeoutMs?: number;
+  octokit: Octokit;
 }
 
 export class CIStatusMonitor {
-  private octokit: Octokit;
-  private executionId: string;
+  private config: CIStatusMonitorConfig;
+  private auditLogger: AuditLogger;
 
-  constructor(octokit: Octokit, executionId: string) {
-    this.octokit = octokit;
-    this.executionId = executionId;
+  constructor(config: CIStatusMonitorConfig) {
+    this.config = config;
+    this.auditLogger = new AuditLogger(getPool());
   }
 
-  async monitor(config: MonitorConfig): Promise<CIStatusResult> {
+  async monitor(): Promise<CIPollerResult> {
+    const { executionId, storyId, owner, repo, headSha, requiredChecks } = this.config;
+
+    const runs = await this.getWorkflowRuns();
+    const statuses = runs.map((r: WorkflowRun) => ({
+      name: r.name,
+      status: r.status,
+      conclusion: r.conclusion
+    }));
+
+    const allFound = requiredChecks.every((name: string) => statuses.some((s) => s.name === name));
+    if (!allFound) {
+      const missing = requiredChecks.filter((name: string) => !statuses.some((s) => s.name === name));
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'ci_monitor_missing_checks',
+        state: 'CI_PENDING',
+        status: 'WARN',
+        message: `Required checks not yet found: ${missing.join(', ')}`,
+        metadata: { missing }
+      });
+    }
+
     const pollerConfig: CIPollerConfig = {
-      owner: config.owner,
-      repo: config.repo,
-      ref: config.ref,
-      requiredChecks: config.requiredChecks,
-      pollIntervalMs: config.pollIntervalMs || 30000,
-      timeoutMs: config.timeoutMs || 2700000
+      ...this.config,
+      pollIntervalMs: 30000,
+      timeoutMs: 45 * 60 * 1000
     };
 
-    const poller = new CIPoller(this.octokit, pollerConfig);
-    const result = await poller.pollUntilComplete();
-
-    await this.persistCIStatus(result);
-    return result;
+    const poller = new CIPoller(pollerConfig);
+    return poller.poll();
   }
 
-  private async persistCIStatus(result: CIStatusResult): Promise<void> {
-    const pool = getPool();
-    try {
-      await pool.query(
-        `UPDATE executions SET ci_status = $1, updated_at = NOW() WHERE execution_id = $2`,
-        [result.status, this.executionId]
-      );
-    } catch (err: unknown) {
-      console.error('[CIStatusMonitor] Error persisting CI status:', err);
-      throw err;
-    }
+  private async getWorkflowRuns(): Promise<WorkflowRun[]> {
+    const { owner, repo, headSha, octokit } = this.config;
+    const { data } = await octokit.actions.listWorkflowRunsForRepo({
+      owner,
+      repo,
+      head_sha: headSha,
+      per_page: 100
+    });
+    return data.workflow_runs.filter((r: WorkflowRun) => r.head_sha === headSha);
   }
 }
