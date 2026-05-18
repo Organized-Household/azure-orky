@@ -286,13 +286,13 @@ Schema:
     let projectContext = '';
     try {
       const projectContextRepo = new ProjectContextRepository();
-      const artifacts = await projectContextRepo.getAll();
+      const artifacts = await projectContextRepo.getByProjectKey(storyPayload.projectKey);
       if (artifacts.length > 0) {
         projectContext = artifacts
           .map((a) => `### ${a.artifactType.toUpperCase()}\n${a.content}`)
           .join('\n\n');
       } else {
-        projectContext = '_(No PDE artifacts seeded yet — seed the project_context table)_';
+        projectContext = `_(No PDE artifacts found for project ${storyPayload.projectKey} — seed the project_context table)_`;
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
