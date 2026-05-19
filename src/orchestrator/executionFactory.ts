@@ -346,12 +346,15 @@ export class ExecutionFactory {
         this.auditLogger,
       );
 
+      // ORKY-83: Pass projectKey so FailureHandler resolves the correct github_token
+      // for PR close and branch delete. Falls back to GH_TOKEN env var for ORKY project.
       await failureHandler.handle({
         executionId: execution.executionId,
         storyId: execution.storyId,
         failedAtState: currentState,
         failureReason: message,
         storyPayload,
+        projectKey: storyPayload?.projectKey ?? 'ORKY',
       });
 
       throw error;

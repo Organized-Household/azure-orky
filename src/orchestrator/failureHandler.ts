@@ -5,6 +5,7 @@ import { InstructionPacketRepository } from '../db/repositories/instructionPacke
 import { RepoChangeSetRepository } from '../db/repositories/repoChangeSetRepository';
 import { FailureReporter } from '../integrations/jira/failureReporter';
 import { StoryPayload } from '../domain/storyPayload';
+import { CredentialResolver } from '../services/credentialResolver';
 
 export interface HandleFailureParams {
   executionId: string;
@@ -12,6 +13,7 @@ export interface HandleFailureParams {
   failedAtState: string;
   failureReason: string;
   storyPayload?: StoryPayload;
+  projectKey: string;
 }
 
 export class FailureHandler {
@@ -30,7 +32,7 @@ export class FailureHandler {
    * 4. Reports failure to Jira if storyPayload is available (STORY-7.3)
    */
   async handle(params: HandleFailureParams): Promise<void> {
-    const { executionId, storyId, failedAtState, failureReason, storyPayload } = params;
+    const { executionId, storyId, failedAtState, failureReason, storyPayload, projectKey } = params;
 
     try {
       await this.executionRepository.updateState(executionId, 'FAILED', failureReason);
@@ -60,7 +62,7 @@ export class FailureHandler {
       metadata: { failedAtState },
     });
 
-    await this.closeOpenPrAndBranch(executionId, storyId, failedAtState);
+    await this.closeOpenPrAndBranch(executionId, storyId, failedAtState, projectKey);
 
     if (storyPayload?.jiraIssueKey) {
       await this.reportToJira(executionId, storyId, storyPayload.jiraIssueKey, failedAtState, failureReason);
@@ -80,6 +82,7 @@ export class FailureHandler {
     executionId: string,
     storyId: string,
     failedAtState: string,
+    projectKey: string,
   ): Promise<void> {
     let changeSet: Awaited<ReturnType<RepoChangeSetRepository['getPrDataByExecutionId']>>;
     try {
@@ -150,7 +153,25 @@ export class FailureHandler {
       return;
     }
 
-    const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+    // ORKY-83: Resolve per-project github_token via CredentialResolver.
+    // CredentialResolver falls back to GH_TOKEN env var automatically — ORKY project behaviour unchanged.
+    // resolve() never throws and never logs the token value.
+    const credentialResolver = new CredentialResolver();
+    const githubToken = await credentialResolver.resolve(projectKey, 'github_token');
+
+    if (!githubToken) {
+      await this.safeLog({
+        executionId,
+        storyId,
+        step: 'cleanup_skipped',
+        state: 'FAILED',
+        status: 'warn',
+        message: `No github_token resolved for project ${projectKey} — PR and branch cleanup skipped`,
+      });
+      return;
+    }
+
+    const octokit = new Octokit({ auth: githubToken });
 
     if (prUrl) {
       const prNumberMatch = prUrl.match(/\/pull\/(\d+)$/);
