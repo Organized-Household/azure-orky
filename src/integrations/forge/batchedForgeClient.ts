@@ -3,6 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { AuditLogger } from '../../audit/auditLogger';
 import { InstructionPacket } from '../../domain/instructionPacket';
 import { StoryPayload } from '../../domain/storyPayload';
+import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
+import { TokenUsageRepository } from '../../db/repositories/tokenUsageRepository';
+import { CostGuard } from '../../orchestrator/costGuard';
 import { createOctokit } from '../github/githubClient';
 
 export interface BatchedDIPRequest {
@@ -41,13 +44,19 @@ export interface BatchedDIP {
 }
 
 export class BatchedForgeClient {
-  private client: Anthropic;
+  // ORKY-82: Replaced direct Anthropic client with AnthropicRetryClient.
+  // Follows the pattern established in forgeClient.ts during ORKY-67.
+  private retryClient: AnthropicRetryClient;
+  private tokenUsageRepo: TokenUsageRepository;
+  private costGuard: CostGuard;
   // ORKY-93: Expose last fetched snapshot files so BatchOrchestrator can pass
   // them to PacketNegotiationOrchestrator without fetching twice.
   private lastSnapshotFiles: Array<{ path: string; content: string }> = [];
 
   constructor(private auditLogger: AuditLogger) {
-    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    this.retryClient = new AnthropicRetryClient();
+    this.tokenUsageRepo = new TokenUsageRepository();
+    this.costGuard = new CostGuard(this.tokenUsageRepo, this.auditLogger);
   }
 
   // ORKY-93: Returns snapshot files from the most recent generateBatchedDIP call.
@@ -57,10 +66,15 @@ export class BatchedForgeClient {
 
   async generateBatchedDIP(request: BatchedDIPRequest): Promise<BatchedDIP> {
     const requestId = uuidv4();
+    const executionId = request.batchExecutionId;
+    const storyId = request.storyIds.join(',');
+
+    // ORKY-82: CostGuard check before API call
+    await this.costGuard.check(executionId, storyId);
 
     await this.auditLogger.log({
-      executionId: request.batchExecutionId,
-      storyId: request.storyIds.join(','),
+      executionId,
+      storyId,
       step: 'BATCHED_DIP_GENERATION',
       state: 'FORGE_INVOKED',
       status: 'IN_PROGRESS',
@@ -87,49 +101,82 @@ export class BatchedForgeClient {
     }
     const prompt = this.buildBatchedDIPPrompt(request, currentFileContents, repoName);
 
+    let response: Anthropic.Message;
     try {
-      const response = await this.client.messages.create({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 8192,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Forge response was not text');
-      }
-
-      const dip = this.parseBatchedDIPResponse(content.text, request.storyIds);
-
-      await this.auditLogger.log({
-        executionId: request.batchExecutionId,
-        storyId: request.storyIds.join(','),
-        step: 'BATCHED_DIP_GENERATION',
-        state: 'PACKET_RECEIVED',
-        status: 'success',
-        message: `Batched DIP generated successfully: ${dip.packetId}`,
-        metadata: { packetId: dip.packetId, fileOperationCount: dip.fileOperations.length },
-      });
-
-      return dip;
+      response = await this.retryClient.createMessage(
+        {
+          model: 'claude-sonnet-4-5',
+          max_tokens: 8192,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        async (retryInfo) => {
+          console.log(
+            `[BatchedForgeClient] Retry attempt ${retryInfo.attempt}/${retryInfo.maxRetries} — waiting ${retryInfo.waitMs}ms. Reason: ${retryInfo.errorMessage}`,
+          );
+          await this.auditLogger.log({
+            executionId,
+            storyId,
+            step: 'api_retry',
+            state: 'FORGE_INVOKED',
+            status: 'retrying',
+            message: `Anthropic API retry — attempt ${retryInfo.attempt} of ${retryInfo.maxRetries}, waiting ${retryInfo.waitMs}ms`,
+            metadata: {
+              attempt: retryInfo.attempt,
+              maxRetries: retryInfo.maxRetries,
+              waitMs: retryInfo.waitMs,
+              errorMessage: retryInfo.errorMessage,
+            },
+          });
+        },
+      );
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
+      let code: 'FORGE_HTTP_ERROR' | 'FORGE_TIMEOUT' = 'FORGE_HTTP_ERROR';
+      if (err instanceof AnthropicRetryExhaustedError && err.code === 'TIMEOUT') {
+        code = 'FORGE_TIMEOUT';
+      }
       await this.auditLogger.log({
-        executionId: request.batchExecutionId,
-        storyId: request.storyIds.join(','),
+        executionId,
+        storyId,
         step: 'BATCHED_DIP_GENERATION',
         state: 'FORGE_INVOKED',
         status: 'error',
         message: `Batched DIP generation failed: ${error.message}`,
-        metadata: { error: error.message, requestId },
+        metadata: { error: error.message, code, requestId },
       });
       throw error;
     }
+
+    // ORKY-82: Record token usage — non-blocking
+    try {
+      await this.tokenUsageRepo.record(executionId, 'forge_generate', response.usage.input_tokens, response.usage.output_tokens);
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[BatchedForgeClient] Failed to record token usage (forge_generate):', error.message);
+    }
+
+    const content = response.content[0];
+    if (content.type !== 'text') {
+      throw new Error('Forge response was not text');
+    }
+
+    const dip = this.parseBatchedDIPResponse(content.text, request.storyIds);
+
+    await this.auditLogger.log({
+      executionId,
+      storyId,
+      step: 'BATCHED_DIP_GENERATION',
+      state: 'PACKET_RECEIVED',
+      status: 'success',
+      message: `Batched DIP generated successfully: ${dip.packetId}`,
+      metadata: { packetId: dip.packetId, fileOperationCount: dip.fileOperations.length },
+    });
+
+    return dip;
   }
 
   // ORKY-93: Revision method for PacketNegotiationOrchestrator forgeRevise callback.
-  // Uses the same direct Anthropic SDK pattern as generateBatchedDIP — migration to
-  // AnthropicRetryClient is ORKY-82 (separate story, out of scope here).
+  // ORKY-82: Uses AnthropicRetryClient, CostGuard, and TokenUsageRepository.
   async revise(
     executionId: string,
     storyId: string,
@@ -138,6 +185,9 @@ export class BatchedForgeClient {
     currentPacket: InstructionPacket,
     contextFiles?: Record<string, string>,
   ): Promise<InstructionPacket> {
+    // ORKY-82: CostGuard check before API call
+    await this.costGuard.check(executionId, storyId);
+
     await this.auditLogger.log({
       executionId,
       storyId,
@@ -192,47 +242,34 @@ export class BatchedForgeClient {
       `- Keep baseBranch: "${currentPacket.baseBranch}"\n` +
       `- Fix all listed issues in fileOperations`;
 
+    let response: Anthropic.Message;
     try {
-      const response = await this.client.messages.create({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 8192,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const responseContent = response.content[0];
-      if (responseContent.type !== 'text') {
-        throw new Error('Forge revision response was not text');
-      }
-
-      let parsed: unknown;
-      try {
-        const stripped = responseContent.text
-          .replace(/^```json\s*/i, '')
-          .replace(/^```\s*/i, '')
-          .replace(/```\s*$/i, '')
-          .trim();
-        const start = stripped.indexOf('{');
-        const end = stripped.lastIndexOf('}');
-        const cleaned = start !== -1 && end > start ? stripped.slice(start, end + 1) : stripped;
-        parsed = JSON.parse(cleaned);
-      } catch (parseErr: unknown) {
-        const parseError = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
-        throw new Error(`Failed to parse Forge revision response: ${parseError.message}`);
-      }
-
-      const revisedPacket = parsed as InstructionPacket;
-
-      await this.auditLogger.log({
-        executionId,
-        storyId,
-        step: 'BATCHED_DIP_REVISION',
-        state: 'NEGOTIATING',
-        status: 'success',
-        message: `Forge revision received for packet ${revisedPacket.packetId}`,
-        metadata: { packetId: revisedPacket.packetId },
-      });
-
-      return revisedPacket;
+      response = await this.retryClient.createMessage(
+        {
+          model: 'claude-sonnet-4-5',
+          max_tokens: 8192,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        async (retryInfo) => {
+          console.log(
+            `[BatchedForgeClient] Retry attempt ${retryInfo.attempt}/${retryInfo.maxRetries} — waiting ${retryInfo.waitMs}ms. Reason: ${retryInfo.errorMessage}`,
+          );
+          await this.auditLogger.log({
+            executionId,
+            storyId,
+            step: 'api_retry',
+            state: 'NEGOTIATING',
+            status: 'retrying',
+            message: `Anthropic API retry — attempt ${retryInfo.attempt} of ${retryInfo.maxRetries}, waiting ${retryInfo.waitMs}ms`,
+            metadata: {
+              attempt: retryInfo.attempt,
+              maxRetries: retryInfo.maxRetries,
+              waitMs: retryInfo.waitMs,
+              errorMessage: retryInfo.errorMessage,
+            },
+          });
+        },
+      );
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
       await this.auditLogger.log({
@@ -246,6 +283,49 @@ export class BatchedForgeClient {
       });
       throw error;
     }
+
+    // ORKY-82: Record token usage — non-blocking
+    try {
+      await this.tokenUsageRepo.record(executionId, 'forge_revise', response.usage.input_tokens, response.usage.output_tokens);
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[BatchedForgeClient] Failed to record token usage (forge_revise):', error.message);
+    }
+
+    const responseContent = response.content[0];
+    if (responseContent.type !== 'text') {
+      throw new Error('Forge revision response was not text');
+    }
+
+    let parsed: unknown;
+    try {
+      const stripped = responseContent.text
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+      const start = stripped.indexOf('{');
+      const end = stripped.lastIndexOf('}');
+      const cleaned = start !== -1 && end > start ? stripped.slice(start, end + 1) : stripped;
+      parsed = JSON.parse(cleaned);
+    } catch (parseErr: unknown) {
+      const parseError = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
+      throw new Error(`Failed to parse Forge revision response: ${parseError.message}`);
+    }
+
+    const revisedPacket = parsed as InstructionPacket;
+
+    await this.auditLogger.log({
+      executionId,
+      storyId,
+      step: 'BATCHED_DIP_REVISION',
+      state: 'NEGOTIATING',
+      status: 'success',
+      message: `Forge revision received for packet ${revisedPacket.packetId}`,
+      metadata: { packetId: revisedPacket.packetId },
+    });
+
+    return revisedPacket;
   }
 
   private buildBatchedDIPPrompt(
