@@ -55,7 +55,13 @@ export function validateJiraWebhookPayload(
   const webhookEvent = toPlainText(root.webhookEvent);
   const targetStatus = getTargetStatus(root);
 
-  if (!isIssueUpdatedEvent(webhookEvent) || targetStatus !== "Ready for Engineering") {
+  // JIRA_TRIGGER_STATUS env var controls which Jira status fires the pipeline.
+  // Default: 'IN PROGRESS' — works for all standard Jira projects out of the box.
+  // Override in Railway env vars for projects that use a custom status name
+  // (e.g. JIRA_TRIGGER_STATUS='Ready for Engineering' for the ORKY project).
+  const triggerStatus = process.env.JIRA_TRIGGER_STATUS ?? 'IN PROGRESS';
+
+  if (!isIssueUpdatedEvent(webhookEvent) || targetStatus !== triggerStatus) {
     return {
       valid: false,
       ignored: true,
