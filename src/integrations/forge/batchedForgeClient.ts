@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 import { AuditLogger } from '../../audit/auditLogger';
+import { createOctokit } from '../github/githubClient';
 
 export interface BatchedDIPRequest {
   batchExecutionId: string;
@@ -57,7 +58,20 @@ export class BatchedForgeClient {
       metadata: { requestId, storyIds: request.storyIds },
     });
 
-    const prompt = this.buildBatchedDIPPrompt(request);
+    const repoOwner = process.env.GITHUB_REPOSITORY_OWNER ?? 'unknown-owner';
+    const repoName = process.env.GITHUB_TARGET_REPO ?? 'orky';
+    let currentFileContents = '_File content fetch skipped._';
+    try {
+      currentFileContents = await this.fetchCurrentFileContents(
+        request.stories,
+        repoOwner,
+        repoName,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[BatchedForgeClient] fetchCurrentFileContents failed: ${msg} — proceeding without file contents`);
+    }
+    const prompt = this.buildBatchedDIPPrompt(request, currentFileContents, repoName);
 
     try {
       const response = await this.client.messages.create({
@@ -99,7 +113,7 @@ export class BatchedForgeClient {
     }
   }
 
-  private buildBatchedDIPPrompt(request: BatchedDIPRequest): string {
+  private buildBatchedDIPPrompt(request: BatchedDIPRequest, currentFileContents: string = '_Not fetched._', repoName: string = 'orky'): string {
     const storySection = request.stories
       .map(
         (story, index) => `### Story ${index + 1}: ${story.jiraIssueKey} — ${story.title}
@@ -150,7 +164,7 @@ You implement specifications exactly as written. You write safe, production-qual
 - Migration numbering: use the next sequential number after the highest existing migration
 - If a table already exists in the migration inventory, do NOT create it again — add an ALTER TABLE migration instead
 - AuditLogger.log() signature: { executionId: string, storyId: string, step: string, state: string, status: string, message?: string, metadata?: unknown } — executionId and storyId are never null, use '' if not applicable; metadata takes an object (not a JSON string); there is no timestamp field
-- Project context artifacts are fetched via ProjectContextRepository.getAll() in src/db/repositories/projectContextRepository.ts — never invent an ArtifactResolver or similar abstraction
+- Project context artifacts are fetched via ProjectContextRepository.getByProjectKey(storyPayload.projectKey) in src/db/repositories/projectContextRepository.ts — never getAll(), never invent an ArtifactResolver
 
 ---
 
@@ -172,6 +186,15 @@ ${request.codebaseSnapshot}
 
 ---
 
+## Current File Contents
+The following shows the EXACT current content of files mentioned in the stories above.
+When generating fileOperations for these files, you MUST produce targeted modify operations
+that preserve the existing structure. NEVER replace an entire file when a targeted change suffices.
+
+${currentFileContents}
+
+---
+
 ## Stories to Implement (Batched DIP)
 
 This DIP must cover ALL of the following stories in a single unified implementation:
@@ -188,7 +211,7 @@ Schema:
 {
   "packetId": "<uuid>",
   "storyIds": ${JSON.stringify(request.storyIds)},
-  "targetRepository": "${repoOwner}/orky",
+  "targetRepository": "${repoOwner}/${repoName}",
   "baseBranch": "dev",
   "branchNameHint": "<kebab-case hint covering all stories>",
   "fileOperations": [
@@ -205,6 +228,60 @@ Schema:
   "implementationSummary": "<human-readable summary of what was built and why, for the decision log>",
   "jiraLinkage": "${request.storyIds.join(', ')}"
 }`;
+  }
+
+  private async fetchCurrentFileContents(
+    stories: BatchedDIPRequest['stories'],
+    repoOwner: string,
+    repoName: string,
+  ): Promise<string> {
+    const allText = stories
+      .map((s) => `${s.description} ${s.acceptanceCriteria}`)
+      .join(' ');
+
+    const filePathRegex = /\b(src\/[\w/.-]+\.ts|migrations\/[\w/.-]+\.sql)\b/g;
+    const matches = [...allText.matchAll(filePathRegex)];
+    const uniquePaths = [...new Set(matches.map((m) => m[1]))];
+
+    if (uniquePaths.length === 0) {
+      return '_No existing file paths detected in story descriptions._';
+    }
+
+    const sections: string[] = [];
+    let octokit: ReturnType<typeof createOctokit>;
+    try {
+      octokit = createOctokit();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `_Could not initialise GitHub client to fetch file contents: ${msg}_`;
+    }
+
+    for (const filePath of uniquePaths) {
+      try {
+        const response = await octokit.repos.getContent({
+          owner: repoOwner,
+          repo: repoName,
+          path: filePath,
+          ref: 'dev',
+        });
+        const data = response.data;
+        if (Array.isArray(data) || data.type !== 'file') {
+          sections.push(`### ${filePath}\n_(directory or non-file — skipped)_`);
+          continue;
+        }
+        const content = Buffer.from(data.content, 'base64').toString('utf-8');
+        sections.push(`### ${filePath}\n\`\`\`typescript\n${content}\n\`\`\``);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
+          sections.push(`### ${filePath}\n_(new file — does not exist yet)_`);
+        } else {
+          sections.push(`### ${filePath}\n_(fetch failed: ${msg} — treat as unknown)_`);
+        }
+      }
+    }
+
+    return sections.join('\n\n');
   }
 
   private parseBatchedDIPResponse(responseText: string, expectedStoryIds: string[]): BatchedDIP {
