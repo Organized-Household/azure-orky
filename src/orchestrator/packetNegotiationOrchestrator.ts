@@ -41,6 +41,12 @@ export class PacketNegotiationOrchestrator {
     // ORKY-66: resolved per-call so env changes take effect without restart
     const maxRounds = parseInt(process.env.NEGOTIATION_MAX_ROUNDS ?? '3', 10);
 
+    // ORKY-95: Skip TypeScript compilation check when env var is set.
+    // Required for non-Orky projects (e.g. React Native) whose dependencies
+    // do not exist in Orky's node_modules. PacketReviewer serves as sole gate.
+    // Set NEGOTIATION_SKIP_COMPILATION=true in Railway for non-Orky projects.
+    const skipCompilation = process.env.NEGOTIATION_SKIP_COMPILATION === 'true';
+
     await this.executionRepository.updateState(executionId, 'NEGOTIATING');
 
     await this.auditLogger.log({
@@ -49,8 +55,19 @@ export class PacketNegotiationOrchestrator {
       step: 'NEGOTIATION_START',
       state: 'NEGOTIATING',
       status: 'info',
-      message: `Negotiation starting. maxRounds=${maxRounds}`,
+      message: `Negotiation starting. maxRounds=${maxRounds}, skipCompilation=${skipCompilation}`,
     });
+
+    if (skipCompilation) {
+      await this.auditLogger.log({
+        executionId,
+        storyId,
+        step: 'negotiation_compilation_skipped',
+        state: 'NEGOTIATING',
+        status: 'info',
+        message: 'TypeScript compilation check skipped (NEGOTIATION_SKIP_COMPILATION=true) — PacketReviewer is sole gate',
+      });
+    }
 
     const snapshotMap = new Map((snapshotFiles ?? []).map((f) => [f.path, f.content]));
 
@@ -97,18 +114,21 @@ export class PacketNegotiationOrchestrator {
         };
       } else {
         // --- TypeScript compilation check ---
-        compilationErrors = await this.compilationChecker.check(currentPacket.fileOperations);
+        // ORKY-95: Skipped when NEGOTIATION_SKIP_COMPILATION=true (non-Orky projects)
+        if (!skipCompilation) {
+          compilationErrors = await this.compilationChecker.check(currentPacket.fileOperations);
 
-        if (compilationErrors.length > 0) {
-          await this.auditLogger.log({
-            executionId,
-            storyId,
-            step: 'negotiation_compilation_failed',
-            state: 'NEGOTIATING',
-            status: 'warn',
-            message: `Round ${roundNumber}: ${compilationErrors.length} new TypeScript error(s)`,
-            metadata: { compilationErrors },
-          });
+          if (compilationErrors.length > 0) {
+            await this.auditLogger.log({
+              executionId,
+              storyId,
+              step: 'negotiation_compilation_failed',
+              state: 'NEGOTIATING',
+              status: 'warn',
+              message: `Round ${roundNumber}: ${compilationErrors.length} new TypeScript error(s)`,
+              metadata: { compilationErrors },
+            });
+          }
         }
 
         // --- Semantic review ---
@@ -128,10 +148,13 @@ export class PacketNegotiationOrchestrator {
 
       const approved = compilationErrors.length === 0 && reviewResult.verdict === 'APPROVED';
 
-      // --- ORKY-63: Stall detection (before persisting round) ---
+      // --- ORKY-63 / ORKY-95: Stall detection (before persisting round) ---
+      // ORKY-95 fix: compare allIssues (compilation + reviewer) not reviewResult.issues alone.
+      // Previously only compared reviewer issues — caused false stall when reviewer approved
+      // but compilation errors existed (e.g. React Native imports not in Orky node_modules).
       if (!approved) {
         const currentIssuesJson = JSON.stringify(
-          [...(reviewResult.issues ?? [])].sort()
+          [...allIssues].sort()
         );
 
         if (previousIssuesJson !== null && currentIssuesJson === previousIssuesJson) {
