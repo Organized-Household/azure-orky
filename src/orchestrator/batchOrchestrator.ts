@@ -13,6 +13,7 @@ import { BatchedForgeClient, BatchedDIP } from '../integrations/forge/batchedFor
 import { ForgePlannerClient, PacketPlan } from '../integrations/forge/forgePlannerClient';
 import { PacketReviewer } from '../integrations/review/packetReviewer';
 import { PacketNegotiationOrchestrator } from './packetNegotiationOrchestrator';
+import { CodebaseSnapshotFetcher } from '../integrations/github/codebaseSnapshotFetcher';
 import { PrOrchestrator } from '../integrations/github/prOrchestrator';
 import { JiraUpdater } from '../integrations/jira/jiraUpdater';
 import { StoryRetrievalService } from '../integrations/jira/storyRetrievalService';
@@ -73,6 +74,7 @@ export class BatchOrchestrator {
       await this.generateDIPsFromPlan(
         batchExecutionId,
         batch.epic_id,
+        batch.project_key,
         packetPlan,
         stories,
         projectContext,
@@ -193,12 +195,12 @@ export class BatchOrchestrator {
   private async generateDIPsFromPlan(
     batchExecutionId: string,
     epicId: string,
+    projectKey: string,
     packetPlan: PacketPlan,
     allStories: StoryPayload[],
     projectContext: string,
   ): Promise<void> {
     const implementationHistory = await this.fetchImplementationHistory(epicId);
-    const codebaseSnapshot = '_(No codebase snapshot available for batch DIP generation)_';
 
     for (const dipItem of packetPlan.packetPlan) {
       await this.auditLogger.log({
@@ -220,7 +222,9 @@ export class BatchOrchestrator {
           );
         }
 
-        // ORKY-93: Generate initial DIP
+        // ORKY-93: Generate initial DIP.
+        // codebaseSnapshot is initially empty — it is populated after DIP generation
+        // once fileOperations are known (ORKY-98).
         const dip = await this.batchedForgeClient.generateBatchedDIP({
           batchExecutionId,
           epicId,
@@ -234,7 +238,7 @@ export class BatchOrchestrator {
           })),
           projectContext,
           implementationHistory,
-          codebaseSnapshot,
+          codebaseSnapshot: '_(Snapshot fetched after DIP generation — see negotiation context)_',
         });
 
         // ORKY-93: Map BatchedDIP to InstructionPacket before negotiation.
@@ -274,6 +278,55 @@ export class BatchOrchestrator {
           metadata: { packetId: dip.packetId, batchExecutionId, storyIds: dip.storyIds },
         });
 
+        // ORKY-98: Fetch codebase snapshot AFTER DIP generation so fileOperations
+        // are known. Parse owner/repo from targetRepository to support non-Orky projects.
+        // Follows the same pattern as forgeOrchestrator.ts.
+        // Non-blocking — snapshot failure logs warn and proceeds with empty snapshot.
+        let codebaseSnapshot = '';
+        let snapshotFiles: Array<{ path: string; content: string }> = [];
+        try {
+          const repoParts = dip.targetRepository.split('/');
+          const repoOwner = repoParts.length === 2 ? repoParts[0] : undefined;
+          const repoName = repoParts.length === 2 ? repoParts[1] : undefined;
+          const snapshotFetcher = new CodebaseSnapshotFetcher(repoOwner, repoName);
+          const baseBranch = dip.baseBranch || 'dev';
+          const snapshot = await snapshotFetcher.fetchForEpic(
+            epicId,
+            dip.fileOperations,
+            baseBranch,
+          );
+          snapshotFiles = snapshot.files.map((f) => ({ path: f.path, content: f.content }));
+          if (snapshot.files.length > 0) {
+            codebaseSnapshot = snapshot.files
+              .map((f) => `#### \`${f.path}\`\n\`\`\`typescript\n${f.content}\n\`\`\``)
+              .join('\n\n');
+          }
+          await this.auditLogger.log({
+            executionId: childExecution.executionId,
+            storyId: dip.storyIds.join(','),
+            step: 'batch_snapshot_fetched',
+            state: 'RECEIVED',
+            status: 'info',
+            message: `Codebase snapshot fetched: ${snapshot.files.length} file(s), ${snapshot.totalChars} chars for ${dip.targetRepository}`,
+            metadata: {
+              fileCount: snapshot.files.length,
+              totalChars: snapshot.totalChars,
+              warnings: snapshot.warnings,
+              targetRepository: dip.targetRepository,
+            },
+          });
+        } catch (snapshotErr: unknown) {
+          const msg = snapshotErr instanceof Error ? snapshotErr.message : String(snapshotErr);
+          await this.auditLogger.log({
+            executionId: childExecution.executionId,
+            storyId: dip.storyIds.join(','),
+            step: 'batch_snapshot_failed',
+            state: 'RECEIVED',
+            status: 'warn',
+            message: `Codebase snapshot unavailable for batch negotiation — proceeding without it: ${msg}`,
+          });
+        }
+
         // ORKY-93: Wire PacketNegotiationOrchestrator into batch path.
         // Follows the pattern in src/orchestrator/forgeOrchestrator.ts exactly.
         const reviewer = new PacketReviewer(this.auditLogger);
@@ -298,9 +351,6 @@ export class BatchOrchestrator {
             contextFiles,
           );
         };
-
-        // Reuse snapshot files captured during generateBatchedDIP — no double fetch.
-        const snapshotFiles = this.batchedForgeClient.getLastSnapshotFiles();
 
         const negotiationResult = await negotiationOrchestrator.negotiate(
           childExecution.executionId,
