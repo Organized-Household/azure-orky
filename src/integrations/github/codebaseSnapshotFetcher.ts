@@ -20,11 +20,18 @@ export class CodebaseSnapshotFetcher {
   private readonly owner: string;
   private readonly repo: string;
 
-  constructor() {
-    const owner = process.env.GITHUB_REPOSITORY_OWNER;
-    if (!owner) throw new Error('GITHUB_REPOSITORY_OWNER is not set');
-    this.owner = owner;
-    this.repo = process.env.GITHUB_TARGET_REPO ?? 'orky';
+  // ORKY-98: owner and repo are now optional params to support non-Orky projects.
+  // When omitted, falls back to env vars — existing forgeOrchestrator.ts call site
+  // continues to work unchanged (always targets the Orky repo).
+  constructor(owner?: string, repo?: string) {
+    if (owner) {
+      this.owner = owner;
+    } else {
+      const envOwner = process.env.GITHUB_REPOSITORY_OWNER;
+      if (!envOwner) throw new Error('GITHUB_REPOSITORY_OWNER is not set');
+      this.owner = envOwner;
+    }
+    this.repo = repo ?? process.env.GITHUB_TARGET_REPO ?? 'orky';
   }
 
   /**
