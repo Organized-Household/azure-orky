@@ -12,6 +12,7 @@ import { AuditLogger } from '../../audit/auditLogger';
 import { AnthropicRetryClient, AnthropicRetryExhaustedError } from '../anthropic/anthropicRetryClient';
 import { TokenUsageRepository } from '../../db/repositories/tokenUsageRepository';
 import { CostGuard, CostGuardExceededError } from '../../orchestrator/costGuard';
+import { createOctokit } from '../github/githubClient';
 
 export class ForgeInvocationError extends Error {
   constructor(
@@ -40,6 +41,71 @@ function extractJsonObject(text: string): string {
     return text.slice(start, end + 1);
   }
   return text;
+}
+
+/**
+ * Extracts src/**\/*.ts and migrations/**\/*.sql file paths mentioned in
+ * the story's description and acceptance criteria text, fetches their
+ * current content from GitHub (dev branch), and returns a formatted
+ * markdown section for inclusion in the Forge prompt.
+ *
+ * This mirrors the pattern in batchedForgeClient.fetchCurrentFileContentsWithSnapshot()
+ * and is the fix for ORKY-99: Forge was going blind into files it had
+ * never seen because forgeClient.assembleContext() passed an empty
+ * fileOperations array to CodebaseSnapshotFetcher.
+ */
+async function fetchAcFilesFromGitHub(
+  storyPayload: StoryPayload,
+  repoOwner: string,
+  repoName: string,
+): Promise<string> {
+  const allText = `${storyPayload.description} ${storyPayload.acceptanceCriteria}`;
+  const filePathRegex = /\b(src\/[\w/.-]+\.ts|migrations\/[\w/.-]+\.sql)\b/g;
+  const matches = [...allText.matchAll(filePathRegex)];
+  const uniquePaths = [...new Set(matches.map((m) => m[1]))];
+
+  if (uniquePaths.length === 0) {
+    return '_No existing file paths detected in story description or acceptance criteria._';
+  }
+
+  console.log(`[ForgeClient] ORKY-99: detected ${uniquePaths.length} file path(s) in AC text:`, uniquePaths);
+
+  let octokit: ReturnType<typeof createOctokit>;
+  try {
+    octokit = createOctokit();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `_Could not initialise GitHub client to fetch AC file contents: ${msg}_`;
+  }
+
+  const sections: string[] = [];
+
+  for (const filePath of uniquePaths) {
+    try {
+      const response = await octokit.repos.getContent({
+        owner: repoOwner,
+        repo: repoName,
+        path: filePath,
+        ref: 'dev',
+      });
+      const data = response.data;
+      if (Array.isArray(data) || data.type !== 'file') {
+        sections.push(`### ${filePath}\n_(directory or non-file — skipped)_`);
+        continue;
+      }
+      const content = Buffer.from(data.content, 'base64').toString('utf-8');
+      sections.push(`### ${filePath}\n\`\`\`typescript\n${content}\n\`\`\``);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
+        sections.push(`### ${filePath}\n_(new file — does not exist yet)_`);
+      } else {
+        sections.push(`### ${filePath}\n_(fetch failed: ${msg} — treat as unknown)_`);
+      }
+    }
+  }
+
+  return sections.join('\n\n');
 }
 
 export class ForgeClient {
@@ -284,6 +350,7 @@ Schema:
     projectContext: string;
     implementationHistory: string;
     codebaseSnapshot: string;
+    acFileContents: string;
     migrationInventory: string;
     projectRecord: ProjectRecord;
     constraintBlock: string;
@@ -378,7 +445,20 @@ Schema:
       codebaseSnapshot = `_(Codebase snapshot fetch failed: ${msg} — proceeding without snapshot)_`;
     }
 
-    // 4. Migration inventory — non-fatal
+    // 4. ORKY-99: Fetch actual content of files referenced in story AC/description text.
+    // This is the core fix: extracts src/**/*.ts and migrations/**/*.sql paths from
+    // the story text and fetches their live content from GitHub (dev branch).
+    // Forge receives these files verbatim so it makes surgical changes, not replacements.
+    let acFileContents = '';
+    try {
+      const [repoOwner, repoName] = projectRecord.targetRepository.split('/');
+      acFileContents = await fetchAcFilesFromGitHub(storyPayload, repoOwner, repoName);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      acFileContents = `_(AC file fetch failed: ${msg} — proceeding without AC file contents)_`;
+    }
+
+    // 5. Migration inventory — non-fatal
     let migrationInventory = '';
     try {
       const migrationsDir = path.join(process.cwd(), 'migrations');
@@ -392,7 +472,7 @@ Schema:
       migrationInventory = `_(Migration inventory unavailable: ${msg})_`;
     }
 
-    return { projectContext, implementationHistory, codebaseSnapshot, migrationInventory, projectRecord, constraintBlock };
+    return { projectContext, implementationHistory, codebaseSnapshot, acFileContents, migrationInventory, projectRecord, constraintBlock };
   }
 
   private buildPrompt(
@@ -401,6 +481,7 @@ Schema:
       projectContext: string;
       implementationHistory: string;
       codebaseSnapshot: string;
+      acFileContents: string;
       migrationInventory: string;
       projectRecord: ProjectRecord;
       constraintBlock: string;
@@ -488,6 +569,15 @@ ${context.migrationInventory}
 ## Current Codebase (Relevant files for ${epicId || 'this epic'})
 
 ${context.codebaseSnapshot}
+
+---
+
+## Current File Contents (Files referenced in this story's AC and description)
+The following shows the EXACT current content of files mentioned in this story.
+When generating fileOperations for these files, you MUST produce targeted modify operations
+that preserve the existing structure. NEVER replace an entire file when a targeted change suffices.
+
+${context.acFileContents}
 
 ---
 
