@@ -66,14 +66,19 @@ export class BatchedForgeClient {
 
   async generateBatchedDIP(request: BatchedDIPRequest): Promise<BatchedDIP> {
     const requestId = uuidv4();
-    const executionId = request.batchExecutionId;
+    const batchExecutionId = request.batchExecutionId;
     const storyId = request.storyIds.join(',');
 
     // ORKY-82: CostGuard check before API call
-    await this.costGuard.check(executionId, storyId);
+    // CostGuard uses executionId internally — pass batchExecutionId as executionId
+    // for cost tracking purposes (non-fatal if it fails).
+    await this.costGuard.check(batchExecutionId, storyId);
 
+    // ORKY-96: Use batchExecutionId field so audit_logs writes to batch_execution_id
+    // column (NULL for execution_id) instead of attempting a FK violation.
     await this.auditLogger.log({
-      executionId,
+      executionId: '',
+      batchExecutionId,
       storyId,
       step: 'BATCHED_DIP_GENERATION',
       state: 'FORGE_INVOKED',
@@ -114,7 +119,8 @@ export class BatchedForgeClient {
             `[BatchedForgeClient] Retry attempt ${retryInfo.attempt}/${retryInfo.maxRetries} — waiting ${retryInfo.waitMs}ms. Reason: ${retryInfo.errorMessage}`,
           );
           await this.auditLogger.log({
-            executionId,
+            executionId: '',
+            batchExecutionId,
             storyId,
             step: 'api_retry',
             state: 'FORGE_INVOKED',
@@ -136,7 +142,8 @@ export class BatchedForgeClient {
         code = 'FORGE_TIMEOUT';
       }
       await this.auditLogger.log({
-        executionId,
+        executionId: '',
+        batchExecutionId,
         storyId,
         step: 'BATCHED_DIP_GENERATION',
         state: 'FORGE_INVOKED',
@@ -147,9 +154,10 @@ export class BatchedForgeClient {
       throw error;
     }
 
-    // ORKY-82: Record token usage — non-blocking
+    // ORKY-97: Use recordBatch() so token_usage writes to batch_execution_id column
+    // (NULL for execution_id) instead of causing a FK violation against executions.
     try {
-      await this.tokenUsageRepo.record(executionId, 'forge_generate', response.usage.input_tokens, response.usage.output_tokens);
+      await this.tokenUsageRepo.recordBatch(batchExecutionId, 'forge_generate', response.usage.input_tokens, response.usage.output_tokens);
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error('[BatchedForgeClient] Failed to record token usage (forge_generate):', error.message);
@@ -163,7 +171,8 @@ export class BatchedForgeClient {
     const dip = this.parseBatchedDIPResponse(content.text, request.storyIds);
 
     await this.auditLogger.log({
-      executionId,
+      executionId: '',
+      batchExecutionId,
       storyId,
       step: 'BATCHED_DIP_GENERATION',
       state: 'PACKET_RECEIVED',

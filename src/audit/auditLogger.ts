@@ -11,6 +11,7 @@ export interface AuditEvent {
   status: string;
   message?: string;
   metadata?: unknown;
+  batchExecutionId?: string;
 }
 
 export class AuditLogger {
@@ -24,6 +25,7 @@ export class AuditLogger {
       state: event.state,
       status: event.status,
       message: event.message,
+      batchExecutionId: event.batchExecutionId,
       metadataJson:
         event.metadata === undefined
           ? undefined
